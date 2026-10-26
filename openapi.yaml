@@ -1,0 +1,149 @@
+openapi: 3.0.3
+info:
+  title: Social Media Platform API
+  version: 1.0.0
+  description: |
+    Hybrid fan-out feed, aggregated real-time notifications (Socket.io), cursor pagination.
+    Real-time events (Socket.io, `auth: { token }`): `notification:new`, `post:liked`, `comment:new`.
+    Client emits `post:watch` / `post:unwatch` with a post id to receive live counters.
+servers:
+  - url: /
+components:
+  securitySchemes:
+    bearer: { type: http, scheme: bearer, bearerFormat: JWT }
+  parameters:
+    id: { name: id, in: path, required: true, schema: { type: string } }
+    cursor: { name: cursor, in: query, schema: { type: string }, description: Opaque cursor from previous `nextCursor` }
+    limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 50, default: 10 } }
+security: [{ bearer: [] }]
+paths:
+  /api/auth/register:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Create account
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, username, email, password]
+              properties: { name: { type: string }, username: { type: string }, email: { type: string }, password: { type: string, minLength: 8 } }
+      responses: { "201": { description: User + access/refresh tokens }, "409": { description: Username or email taken } }
+  /api/auth/login:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Log in
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } }
+      responses: { "200": { description: User + tokens }, "401": { description: Bad credentials } }
+  /api/auth/refresh:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Rotate refresh token (single-use; reuse revokes all sessions)
+      requestBody:
+        content:
+          application/json:
+            schema: { type: object, required: [refreshToken], properties: { refreshToken: { type: string } } }
+      responses: { "200": { description: New token pair }, "401": { description: Invalid or reused token } }
+  /api/auth/logout:
+    post:
+      tags: [Auth]
+      security: []
+      summary: Revoke a refresh token
+      responses: { "204": { description: Revoked } }
+  /api/auth/me:
+    get: { tags: [Auth], summary: Current user, responses: { "200": { description: OK } } }
+  /api/feed:
+    get:
+      tags: [Feed]
+      summary: Personalised home feed (hybrid fan-out, compound cursor)
+      parameters:
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+        - { name: strategy, in: query, schema: { type: string, enum: [hybrid, mongo] }, description: "Non-production only. `mongo` = pure fan-out-on-read (benchmark baseline)" }
+      responses: { "200": { description: "{ items, nextCursor }" } }
+  /api/posts:
+    post:
+      tags: [Posts]
+      summary: Create post (JSON with mediaUrls, or multipart with up to 5 `images`)
+      responses: { "201": { description: Created } }
+  /api/posts/saved:
+    get: { tags: [Posts], summary: Saved posts, parameters: [{ $ref: '#/components/parameters/cursor' }, { $ref: '#/components/parameters/limit' }], responses: { "200": { description: OK } } }
+  /api/posts/{id}:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    get: { tags: [Posts], summary: Get post, responses: { "200": { description: OK }, "403": { description: Private account } } }
+    delete: { tags: [Posts], summary: Delete own post, responses: { "204": { description: Deleted } } }
+  /api/posts/{id}/like:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Posts], summary: Like (idempotent), responses: { "200": { description: "{ liked, likeCount, changed }" } } }
+    delete: { tags: [Posts], summary: Unlike (idempotent), responses: { "200": { description: OK } } }
+  /api/posts/{id}/save:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Posts], summary: Save post, responses: { "200": { description: OK } } }
+    delete: { tags: [Posts], summary: Unsave post, responses: { "200": { description: OK } } }
+  /api/posts/{id}/comments:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Comments], summary: "Comment or reply (body, optional parentId); @mentions notify", responses: { "201": { description: Created } } }
+    get: { tags: [Comments], summary: List comments, parameters: [{ $ref: '#/components/parameters/cursor' }, { $ref: '#/components/parameters/limit' }], responses: { "200": { description: OK } } }
+  /api/posts/{id}/report:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Moderation], summary: Report post, responses: { "201": { description: Reported } } }
+  /api/users/suggested:
+    get: { tags: [Users], summary: Suggested users, responses: { "200": { description: OK } } }
+  /api/users/me:
+    patch: { tags: [Users], summary: Update profile (name, bio, avatarUrl, isPrivate), responses: { "200": { description: OK } } }
+  /api/users/{username}:
+    get:
+      tags: [Users]
+      summary: Profile with relationship status
+      parameters: [{ name: username, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: OK } }
+  /api/users/{username}/posts:
+    get:
+      tags: [Users]
+      summary: Profile post grid
+      parameters:
+        - { name: username, in: path, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/cursor'
+        - $ref: '#/components/parameters/limit'
+      responses: { "200": { description: OK }, "403": { description: Private account } }
+  /api/users/{id}/follow:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Social graph], summary: Follow (private accounts => pending request), responses: { "201": { description: Followed or requested }, "200": { description: Already following } } }
+    delete: { tags: [Social graph], summary: Unfollow / cancel request, responses: { "200": { description: OK } } }
+  /api/users/{id}/block:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Moderation], summary: Block user (removes follows both ways), responses: { "201": { description: Blocked } } }
+    delete: { tags: [Moderation], summary: Unblock, responses: { "200": { description: OK } } }
+  /api/follow-requests:
+    get: { tags: [Social graph], summary: Pending follow requests, responses: { "200": { description: OK } } }
+  /api/follow-requests/{id}/accept:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    patch: { tags: [Social graph], summary: Accept request (atomic, exactly-once), responses: { "200": { description: OK }, "404": { description: Already handled } } }
+  /api/follow-requests/{id}/reject:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    patch: { tags: [Social graph], summary: Reject request, responses: { "200": { description: OK } } }
+  /api/notifications:
+    get: { tags: [Notifications], summary: Aggregated notifications, parameters: [{ $ref: '#/components/parameters/cursor' }, { $ref: '#/components/parameters/limit' }], responses: { "200": { description: "{ items, nextCursor, unreadCount }" } } }
+  /api/notifications/unread-count:
+    get: { tags: [Notifications], summary: Unread badge count (Redis), responses: { "200": { description: OK } } }
+  /api/notifications/read-all:
+    patch: { tags: [Notifications], summary: Mark all read, responses: { "200": { description: OK } } }
+  /api/notifications/{id}/read:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    patch: { tags: [Notifications], summary: Mark one read, responses: { "200": { description: OK } } }
+  /api/explore/trending:
+    get: { tags: [Explore], summary: Trending hashtags (24h), responses: { "200": { description: OK } } }
+  /api/search:
+    get:
+      tags: [Explore]
+      summary: Search users, posts or hashtags
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string, enum: [user, post, hashtag] } }
+      responses: { "200": { description: OK } }

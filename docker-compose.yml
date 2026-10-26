@@ -1,0 +1,39 @@
+# One command: docker compose up --build
+# Two API instances + one dedicated worker prove that Socket.io + Redis adapter/emitter
+# deliver notifications across processes (open :4000 and :4001 in the demo page).
+x-api: &api
+  build: .
+  depends_on: [mongo, redis]
+  volumes: [uploads-data:/app/data/uploads]
+  environment: &env
+    NODE_ENV: production
+    MONGO_URI: mongodb://mongo:27017/socialfeed
+    REDIS_URL: redis://redis:6379
+    JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-compose-access-secret-change-me}
+    JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-compose-refresh-secret-change-me}
+    RUN_WORKER: "false"
+    CORS_ORIGIN: "*"
+
+services:
+  mongo:
+    image: mongo:7
+    volumes: [mongo-data:/data/db]
+    ports: ["27017:27017"]
+  redis:
+    image: redis:7-alpine
+    ports: ["6379:6379"]
+  api1:
+    <<: *api
+    ports: ["4000:4000"]
+    environment: { <<: *env, PORT: "4000", INSTANCE_ID: api-1 }
+  api2:
+    <<: *api
+    ports: ["4001:4001"]
+    environment: { <<: *env, PORT: "4001", INSTANCE_ID: api-2 }
+  worker:
+    <<: *api
+    command: ["node", "src/worker.js"]
+
+volumes:
+  mongo-data:
+  uploads-data:

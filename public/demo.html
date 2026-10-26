@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live notifications demo</title>
+  <link rel="stylesheet" href="demo.css" />
+</head>
+<body>
+  <header>
+    <h1>Feed &amp; real-time notifications</h1>
+    <p>Two independent clients. Log both in, make <b>Bob follow Alice</b>, let Alice post, then like it as Bob: Alice's badge updates live.
+       Open this page on <code>:4000</code> for one client and <code>:4001</code> for the other (docker compose) to prove cross-instance delivery.</p>
+  </header>
+  <main>
+    <section id="alice"></section>
+    <section id="bob"></section>
+  </main>
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="demo.js"></script>
+</body>
+</html>

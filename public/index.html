@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#faf8f5"><meta name="description" content="Gather is your space to share photos, find your people, and follow the moments that matter."><title>Gather — Your people, your moments</title>
+  <link rel="stylesheet" href="/app.css">
+  <link rel="stylesheet" href="/brand.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="/"><span class="brand-mark">g</span><span>gather<span class="brand-dot">.</span></span></a>
+      <p class="eyebrow">YOUR SPACE</p>
+      <nav class="nav"><button class="nav-link active" data-view="feed"><span>⌂</span> Home feed</button><button class="nav-link" data-view="explore"><span>⌕</span> Explore</button><button class="nav-link" data-view="notifications"><span>♡</span> Notifications <i id="unreadBadge" class="count hidden">0</i></button><button class="nav-link" data-profile-self><span>◉</span> Your profile</button></nav>
+      <div class="sidebar-bottom"><div class="mini-profile"><div class="avatar" id="sideAvatar">G</div><div class="profile-copy"><strong id="sideName">Guest user</strong><small id="sideHandle">Sign in to continue</small></div><button id="logoutBtn" class="icon-btn hidden" title="Log out">↗</button></div><p class="muted tiny">A little corner of the internet.</p></div>
+    </aside>
+    <main class="main-content">
+      <header class="topbar"><div><p class="eyebrow" id="pageEyebrow">YOUR COMMUNITY</p><h1 id="pageTitle">Home feed</h1></div><div class="top-actions"><button class="button button-light" id="refreshBtn">↻ Refresh</button><button class="button button-primary" id="topCreateBtn">＋ Create post</button></div></header>
+      <section id="authPanel" class="auth-layout">
+        <div class="welcome-card">
+          <div class="welcome-orb orb-one"></div><div class="welcome-orb orb-two"></div>
+          <span class="pill"><span class="welcome-live-dot"></span> A LITTLE MORE YOU, EVERY DAY</span>
+          <h2>Your people.<br><em>Your kind of place.</em></h2>
+          <p>A photo from today. A thought worth sharing. A familiar face in your feed. Make room for the moments that feel like you.</p>
+          <div class="welcome-gallery" aria-label="A glimpse of the moments you can share on Gather">
+            <div class="gallery-photo gallery-photo-main"><span class="gallery-sun"></span><span class="gallery-horizon"></span><span class="gallery-photo-caption">Little moments, shared.</span><span class="gallery-like">♥ &nbsp; a little love</span></div>
+            <div class="gallery-photo gallery-photo-side"><span class="gallery-side-flower">✳</span><span class="gallery-side-caption">Good things grow here</span></div>
+            <div class="gallery-note"><span class="gallery-note-icon">↗</span><span><strong>Your next chapter</strong><small>starts with a hello.</small></span></div>
+          </div>
+          <div class="welcome-highlights"><div><span class="highlight-icon highlight-photo">▧</span><span><strong>Share your moments</strong><small>Photos, captions & little details</small></span></div><div><span class="highlight-icon highlight-people">◎</span><span><strong>Find your people</strong><small>Follow creators who inspire you</small></span></div><div><span class="highlight-icon highlight-heart">♡</span><span><strong>Keep the conversation going</strong><small>Likes, comments & real connection</small></span></div></div>
+          <p class="welcome-mantra">Your feed. Your circle. Your kind of internet.</p>
+        </div>
+        <div class="auth-card">
+          <a class="auth-brand" href="/" aria-label="Gather home"><span class="auth-brand-mark">g</span><span>gather<span>.</span></span><span class="auth-brand-note">YOUR PEOPLE, IN ONE PLACE</span></a>
+          <div class="auth-tabs" role="tablist" aria-label="Account access">
+            <button class="auth-tab active" id="loginTab" type="button" role="tab" aria-selected="true" aria-controls="authForm" data-auth="login" tabindex="0">Log in</button>
+            <button class="auth-tab" id="registerTab" type="button" role="tab" aria-selected="false" aria-controls="authForm" data-auth="register" tabindex="-1">Create account</button>
+          </div>
+          <div class="auth-intro-badge"><span aria-hidden="true">✳</span> YOUR CORNER OF THE INTERNET</div>
+          <h2 id="authTitle">Welcome back</h2><p class="muted" id="authSubtitle">Pick up where your community left off.</p>
+          <form id="authForm" novalidate>
+            <label id="nameLabel" class="hidden">Full name<input name="name" autocomplete="name" placeholder="Your name" maxlength="60"></label>
+            <label id="usernameLabel" class="hidden">Username<input name="username" autocomplete="username" placeholder="e.g. abhey_goyal" minlength="3" maxlength="30" pattern="[a-zA-Z0-9_.]{3,30}" aria-describedby="usernameHint"><span id="usernameHint" class="field-hint">3–30 characters: letters, numbers, underscores, or dots.</span></label>
+            <label>Email address<input name="email" type="email" autocomplete="email" placeholder="you@example.com" required></label>
+            <label>Password
+              <span class="password-input"><input name="password" type="password" autocomplete="current-password" placeholder="At least 8 characters" required minlength="8" maxlength="100" aria-describedby="passwordHint"><button class="password-toggle" type="button" data-password-toggle aria-label="Show password" aria-pressed="false"><span>Show</span></button></span>
+              <span id="passwordHint" class="field-hint">Use at least 8 characters.</span>
+            </label>
+            <div id="passwordStrength" class="password-strength hidden" aria-live="polite">
+              <div class="strength-meter" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+              <span class="strength-label">Password strength: <strong id="strengthText">Add a few more details</strong></span>
+            </div>
+            <label id="confirmPasswordLabel" class="hidden">Confirm password
+              <span class="password-input"><input name="confirmPassword" type="password" autocomplete="new-password" placeholder="Enter your password again" aria-describedby="passwordMatch"><button class="password-toggle" type="button" data-password-toggle aria-label="Show password" aria-pressed="false"><span>Show</span></button></span>
+              <span id="passwordMatch" class="field-hint" aria-live="polite"></span>
+            </label>
+            <button class="button button-primary full-width" id="authSubmit" type="submit"><span class="submit-label">Log in</span><span class="submit-arrow" aria-hidden="true">→</span></button>
+            <p class="form-message" id="authMessage" role="status" aria-live="polite"></p>
+          </form>
+          <div class="auth-trust-note"><span aria-hidden="true">✦</span><span><strong>A quieter kind of social</strong><small>Share with your community and see what they're up to.</small></span></div>
+        </div>
+      </section>
+      <section id="appView" class="content-grid hidden"><div class="feed-column">
+        <section id="composer" class="composer card"><div class="composer-head"><div class="avatar" id="composerAvatar">G</div><div><strong>Share a moment</strong><p class="muted tiny">Post a photo or a thought for your community.</p></div></div><form id="postForm"><textarea name="caption" maxlength="2200" placeholder="Write a caption, add #hashtags, and share what you're up to…" rows="3"></textarea><div class="post-image-previews hidden" id="postImagePreviews" aria-live="polite"></div><div class="composer-options"><label class="composer-location">⌖<input name="location" maxlength="100" placeholder="Add a location (optional)"></label><label class="photo-picker" for="postImages"><span aria-hidden="true">▧</span> Add photos <span class="muted tiny" id="photoCount">Up to 5</span></label><input class="visually-hidden" id="postImages" name="images" type="file" accept="image/jpeg,image/png,image/webp,image/gif" multiple><span class="muted tiny"><span id="charCount">0</span>/2200</span><button class="button button-primary" type="submit"><span>Share post</span><span aria-hidden="true">↗</span></button></div><p class="form-message" id="postMessage" role="status"></p></form></section>
+        <div class="feed-heading"><div><p class="eyebrow">FRESH FROM YOUR CIRCLE</p><h2 id="sectionTitle">Latest posts</h2></div><span class="live-dot">Live community</span></div><div id="feedList" class="feed-list"><div class="empty-state"><div class="loading-spinner"></div><p>Loading your feed…</p></div></div><button id="loadMoreBtn" class="button button-light full-width hidden">Load more posts</button>
+      </div><aside class="right-rail"><section class="card rail-card"><div class="rail-heading"><div><p class="eyebrow">PEOPLE TO FOLLOW</p><h3>Meet your community</h3></div><span class="sparkle">✳</span></div><div id="suggestedUsers" class="suggested-users"><p class="muted tiny">Finding people for you…</p></div></section><section class="card rail-card"><div class="rail-heading"><div><p class="eyebrow">WHAT'S BUZZING</p><h3>Trending topics</h3></div><span class="sparkle">#</span></div><div id="trendingList" class="trending-list"><p class="muted tiny">Sign in to discover trending topics.</p></div></section><p class="tiny muted rail-footer">Gather · Built for your community<br><a href="/docs" target="_blank" rel="noreferrer">API documentation</a></p></aside></section>
+      <section id="simpleView" class="simple-view hidden"><div id="simpleContent" class="card simple-card"></div></section>
+      <div id="toast" class="toast" role="status"></div>
+    </main>
+  </div>
+  <dialog id="commentsDialog" class="comments-dialog" aria-labelledby="commentsTitle"><div class="comments-dialog-panel"><header class="comments-header"><h2 id="commentsTitle">Comments</h2><button class="icon-btn" type="button" data-close-comments aria-label="Close comments">×</button></header><div id="commentsPostSummary" class="comments-post-summary"></div><div id="commentList" class="comment-list"><p class="muted tiny">Loading comments…</p></div><form id="commentForm" class="comment-form"><div class="avatar" id="commentAvatar">G</div><input name="body" maxlength="1000" placeholder="Add a comment…" required autocomplete="off"><button class="text-button" type="submit">Post</button></form></div></dialog>
+  <dialog id="profileEditDialog" class="profile-dialog" aria-labelledby="profileEditTitle"><form id="profileEditForm" class="profile-dialog-panel"><header class="comments-header"><div><p class="eyebrow">MAKE IT YOURS</p><h2 id="profileEditTitle">Edit profile</h2></div><button class="icon-btn" type="button" data-close-profile-dialog aria-label="Close profile editor">×</button></header><div class="profile-edit-section"><p class="profile-edit-section-title">Profile information</p><label>Profile photo URL<input name="avatarUrl" type="url" placeholder="https://example.com/photo.jpg" autocomplete="url" aria-describedby="avatarUrlHint"><span class="field-hint" id="avatarUrlHint">Paste a link to your profile picture. Leave blank to use your initials.</span></label><label>Display name<input name="name" maxlength="60" autocomplete="name" required></label><label>Username<input name="username" minlength="3" maxlength="30" pattern="[a-zA-Z0-9_.]{3,30}" autocomplete="username" required><span class="field-hint">3–30 letters, numbers, underscores, or dots.</span></label><label>Bio<textarea name="bio" maxlength="160" rows="3" placeholder="Tell your community a little about yourself"></textarea><span class="field-hint"><span id="profileBioCount">0</span>/160 characters</span></label><label>Website<input name="website" type="url" maxlength="200" placeholder="https://yourwebsite.com" autocomplete="url"></label><label>Pronouns<input name="pronouns" maxlength="40" placeholder="e.g. she/her, he/him, they/them"></label><label>Gender<input name="gender" maxlength="40" placeholder="Optional"></label></div><div class="profile-edit-section"><p class="profile-edit-section-title">Account information</p><label>Email address<input name="email" type="email" autocomplete="email" required></label><p class="field-hint">Your email is used to sign in and is not shown on your public profile.</p><label>Birthday<input name="birthday" type="date" autocomplete="bday" aria-describedby="birthdayHint"><span class="field-hint" id="birthdayHint">Optional and private. It is never shown on your profile.</span></label><label class="profile-privacy-option"><input name="isPrivate" type="checkbox"><span><strong>Private account</strong><small>Only approved followers can see your posts.</small></span></label></div><p class="form-message" id="profileEditMessage" role="status" aria-live="polite"></p><button class="button button-primary full-width" type="submit">Save changes</button></form></dialog>
+  <dialog id="profilePostDialog" class="profile-post-dialog" aria-label="Post details"><button class="icon-btn profile-post-close" type="button" data-close-profile-dialog aria-label="Close post">×</button><div id="profilePostContent"></div></dialog>
+  <script src="/socket.io/socket.io.js"></script><script src="/app.js"></script>
+</body></html>

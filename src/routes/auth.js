@@ -13,7 +13,7 @@ const router = Router();
 const COST = env.NODE_ENV === 'test' ? 4 : 10;
 
 const publicUser = (u) => ({
-  id: u._id, name: u.name, username: u.username, email: u.email, avatarUrl: u.avatarUrl, bio: u.bio,
+  id: u._id, name: u.name, username: u.username, email: u.email, avatarUrl: u.avatarUrl, coverUrl: u.coverUrl, bio: u.bio, location: u.location,
   isPrivate: u.isPrivate, followerCount: u.followerCount, followingCount: u.followingCount,
 });
 

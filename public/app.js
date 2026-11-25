@@ -1,5 +1,5 @@
 const API = '/api';
-const state = { accessToken: localStorage.getItem('gather_access') || '', refreshToken: localStorage.getItem('gather_refresh') || '', user: null, authMode: 'login', view: 'feed', cursor: null, loading: false, selectedImages: [], previewUrls: [], commentPostId: null, profilePosts: [] };
+const state = { accessToken: localStorage.getItem('gather_access') || '', refreshToken: localStorage.getItem('gather_refresh') || '', user: null, authMode: 'login', view: 'feed', cursor: null, loading: false, selectedImages: [], existingMedia: [], previewUrls: [], commentPostId: null, editingPostId: null, profilePosts: [] };
 const $ = (s) => document.querySelector(s);
 const escapeHtml = (v='') => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const avatar = (user={}) => user.avatarUrl ? `<div class="avatar"><img src="${escapeHtml(user.avatarUrl)}" alt=""></div>` : `<div class="avatar">${escapeHtml((user.name || user.username || 'G').slice(0,1).toUpperCase())}</div>`;
@@ -126,17 +126,40 @@ document.querySelectorAll('[data-password-toggle]').forEach(button=>button.addEv
 $('#authForm').elements.password.addEventListener('input',()=>{updatePasswordStrength();updatePasswordMatch()});
 $('#authForm').elements.confirmPassword.addEventListener('input',updatePasswordMatch);
 $('#logoutBtn').addEventListener('click',async()=>{try{if(state.refreshToken)await request('/auth/logout',{method:'POST',body:JSON.stringify({refreshToken:state.refreshToken})})}catch{}showSignedOut();toast('You have logged out.')});
+function applyTheme(theme){
+  document.documentElement.dataset.theme=theme;
+  localStorage.setItem('gather_theme',theme);
+  $('#themeToggle')?.setAttribute('aria-pressed',String(theme==='dark'));
+}
+applyTheme(localStorage.getItem('gather_theme')||'light');
+$('#themeToggle').addEventListener('click',()=>applyTheme(document.documentElement.dataset.theme==='dark'?'light':'dark'));
 const postForm=$('#postForm');
+async function compressImage(file, maxDimension=1600, quality=.82){
+  if(!['image/jpeg','image/png','image/webp'].includes(file.type)) return file;
+  const bitmap=await createImageBitmap(file);
+  const scale=Math.min(1,maxDimension/Math.max(bitmap.width,bitmap.height));
+  const canvas=document.createElement('canvas');
+  canvas.width=Math.max(1,Math.round(bitmap.width*scale));
+  canvas.height=Math.max(1,Math.round(bitmap.height*scale));
+  const context=canvas.getContext('2d');
+  context.drawImage(bitmap,0,0,canvas.width,canvas.height);
+  bitmap.close();
+  const blob=await new Promise((resolve)=>canvas.toBlob(resolve,file.type,quality));
+  if(!blob)return file;
+  return new File([blob],file.name,{type:file.type,lastModified:file.lastModified});
+}
 function renderImagePreviews(){
   state.previewUrls.forEach((url)=>URL.revokeObjectURL(url));
   state.previewUrls=state.selectedImages.map((file)=>URL.createObjectURL(file));
   const preview=$('#postImagePreviews');
-  preview.classList.toggle('hidden',!state.selectedImages.length);
-  preview.innerHTML=state.selectedImages.map((file,index)=>`<div class="image-preview"><img src="${state.previewUrls[index]}" alt="Selected photo ${index+1}"><button type="button" data-remove-image="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button></div>`).join('');
-  $('#photoCount').textContent=state.selectedImages.length?`${state.selectedImages.length}/5 selected`:'Up to 5';
+  preview.classList.toggle('hidden',!state.selectedImages.length&&!state.existingMedia.length);
+  preview.innerHTML=state.existingMedia.map((item,index)=>`<div class="image-preview"><img src="${escapeHtml(item.url)}" alt="Existing photo ${index+1}"><button type="button" data-remove-existing="${index}" aria-label="Remove existing photo">×</button></div>`).join('')+
+    state.selectedImages.map((file,index)=>`<div class="image-preview"><img src="${state.previewUrls[index]}" alt="Selected photo ${index+1}"><button type="button" data-remove-image="${index}" aria-label="Remove ${escapeHtml(file.name)}">×</button></div>`).join('');
+  const total=state.existingMedia.length+state.selectedImages.length;
+  $('#photoCount').textContent=total?`${total}/5 selected`:'Up to 5';
 }
 postForm.elements.caption.addEventListener('input',(event)=>$('#charCount').textContent=event.target.value.length);
-postForm.elements.images.addEventListener('change',(event)=>{
+postForm.elements.images.addEventListener('change',async(event)=>{
   const files=[...event.target.files];
   const invalid=files.find((file)=>!['image/jpeg','image/png','image/webp','image/gif'].includes(file.type)||file.size>8*1024*1024);
   const message=$('#postMessage');
@@ -148,15 +171,21 @@ postForm.elements.images.addEventListener('change',(event)=>{
     event.target.value='';
     return;
   }
-  state.selectedImages=files;
-  renderImagePreviews();
+  try{
+    const compressed=await Promise.all(files.map((file)=>compressImage(file)));
+    state.selectedImages=[...state.selectedImages,...compressed].slice(0,5-state.existingMedia.length);
+    renderImagePreviews();
+  }catch{
+    message.textContent='One of the images could not be processed.';
+    message.dataset.state='error';
+  }
 });
 $('#postImagePreviews').addEventListener('click',(event)=>{
   const remove=event.target.closest('[data-remove-image]');
-  if(!remove)return;
-  state.selectedImages.splice(Number(remove.dataset.removeImage),1);
-  postForm.elements.images.value='';
-  renderImagePreviews();
+  const removeExisting=event.target.closest('[data-remove-existing]');
+  if(remove){state.selectedImages.splice(Number(remove.dataset.removeImage),1)}
+  if(removeExisting){state.existingMedia.splice(Number(removeExisting.dataset.removeExisting),1)}
+  if(remove||removeExisting){postForm.elements.images.value='';renderImagePreviews()}
 });
 postForm.addEventListener('submit',async(event)=>{
   event.preventDefault();
@@ -206,7 +235,7 @@ function postCard(post){
   const profileName=author.name||author.username||'Community member';
   const username=author.username||'member';
   const captionMarkup=caption?`<p class="post-caption"><button class="caption-author" type="button" data-profile="${escapeHtml(username)}">${escapeHtml(username)}</button> ${escapeHtml(caption).replace(/(^|\s)(#[a-z0-9_]+)/gi,'$1<span class="hashtag">$2</span>').replace(/\n/g,'<br>')}</p>`:'';
-  return `<article class="post-card card" data-post-id="${escapeHtml(id||'')}"><header class="post-header"><button class="post-author-profile" type="button" data-profile="${escapeHtml(username)}">${avatar(author)}<span class="author-meta"><strong>${escapeHtml(profileName)}</strong><small>@${escapeHtml(username)} · ${escapeHtml(dateLabel(post.createdAt))}</small></span></button>${author.username===state.user?.username?`<button class="post-menu" data-delete="${escapeHtml(id||'')}" title="Delete post" aria-label="Delete post">···</button>`:''}</header>${carousel}<div class="post-body">${captionMarkup}<div class="post-stats"><span class="like-count" data-like-count>♥ ${Number(post.likeCount||0)} ${Number(post.likeCount||0)===1?'like':'likes'}</span><button type="button" class="comment-count" data-comment="${escapeHtml(id||'')}">View all ${Number(post.commentCount||0)} comments</button>${post.location?`<span>⌖ ${escapeHtml(post.location)}</span>`:''}</div><div class="post-actions"><button type="button" class="post-action like-action${liked?' liked':''}" data-like="${escapeHtml(id||'')}" data-liked="${liked?'1':'0'}" aria-pressed="${liked?'true':'false'}"><span aria-hidden="true">${liked?'♥':'♡'}</span><span>${liked?'Liked':'Like'}</span></button><button type="button" class="post-action" data-comment="${escapeHtml(id||'')}"><span aria-hidden="true">▤</span><span>Comment</span></button><button type="button" class="post-action save-action${saved?' liked':''}" data-save="${escapeHtml(id||'')}" data-saved="${saved?'1':'0'}" aria-pressed="${saved?'true':'false'}"><span aria-hidden="true">♧</span><span>${saved?'Saved':'Save'}</span></button></div></div></article>`;
+  return `<article class="post-card card" data-post-id="${escapeHtml(id||'')}"><header class="post-header"><button class="post-author-profile" type="button" data-profile="${escapeHtml(username)}">${avatar(author)}<span class="author-meta"><strong>${escapeHtml(profileName)}</strong><small>@${escapeHtml(username)} · ${escapeHtml(dateLabel(post.createdAt))}</small></span></button>${author.username===state.user?.username?`<div class="post-menu-wrap"><button class="post-menu" type="button" data-post-menu="${escapeHtml(id||'')}" aria-label="Post options">···</button><div class="post-menu-actions hidden" data-post-menu-actions="${escapeHtml(id||'')}"><button type="button" data-edit-post="${escapeHtml(id||'')}">Edit post</button><button type="button" data-delete="${escapeHtml(id||'')}">Delete post</button></div></div>`:''}</header>${carousel}<div class="post-body">${captionMarkup}<div class="post-stats"><span class="like-count" data-like-count>♥ ${Number(post.likeCount||0)} ${Number(post.likeCount||0)===1?'like':'likes'}</span><button type="button" class="comment-count" data-comment="${escapeHtml(id||'')}">View all ${Number(post.commentCount||0)} comments</button>${post.location?`<span>⌖ ${escapeHtml(post.location)}</span>`:''}</div><div class="post-actions"><button type="button" class="post-action like-action${liked?' liked':''}" data-like="${escapeHtml(id||'')}" data-liked="${liked?'1':'0'}" aria-pressed="${liked?'true':'false'}"><span aria-hidden="true">${liked?'♥':'♡'}</span><span>${liked?'Liked':'Like'}</span></button><button type="button" class="post-action" data-comment="${escapeHtml(id||'')}"><span aria-hidden="true">▤</span><span>Comment</span></button><button type="button" class="post-action save-action${saved?' liked':''}" data-save="${escapeHtml(id||'')}" data-saved="${saved?'1':'0'}" aria-pressed="${saved?'true':'false'}"><span aria-hidden="true">♧</span><span>${saved?'Saved':'Save'}</span></button></div></div></article>`;
 }
 async function loadFeed(append=false){if(state.loading)return;state.loading=true;const list=$('#feedList');if(!append){state.cursor=null;list.innerHTML='<div class="empty-state"><div class="loading-spinner"></div><p>Loading your feed…</p></div>'}try{const qs=new URLSearchParams({limit:'10'});if(append&&state.cursor)qs.set('cursor',state.cursor);const data=await request(`/feed?${qs}`);const items=data.items||data.posts||data.feed||[];state.cursor=data.nextCursor||null;const html=items.map(postCard).join('');if(!append)list.innerHTML=html||'<div class="empty-state"><div class="empty-icon">✳</div><strong>Your feed is ready for a first post.</strong><p>Follow people or share something to get the conversation started.</p></div>';else list.insertAdjacentHTML('beforeend',html);$('#loadMoreBtn').classList.toggle('hidden',!state.cursor);if(!items.length&&!append)$('#loadMoreBtn').classList.add('hidden')}catch(err){list.innerHTML=`<div class="empty-state"><strong>Couldn't load your feed</strong><p>${escapeHtml(err.message)}</p><button class="button button-light" id="retryFeed">Try again</button></div>`;$('#retryFeed')?.addEventListener('click',()=>loadFeed())}finally{state.loading=false}}
 $('#loadMoreBtn').addEventListener('click',()=>loadFeed(true));$('#refreshBtn').addEventListener('click',()=>state.view==='feed'?loadFeed():state.view==='profile'?showProfile(state.currentProfile):navigate(state.view));$('#topCreateBtn').addEventListener('click',()=>{$('#composer').scrollIntoView({behavior:'smooth',block:'center'});$('#postForm').elements.caption.focus()});
@@ -276,8 +305,29 @@ document.addEventListener('click',async(event)=>{
   const follow=target.closest('[data-follow-user]');
   const followRequest=target.closest('[data-follow-request]');
   const profilePost=target.closest('[data-profile-post]');
+  const postMenu=target.closest('[data-post-menu]');
+  const editPost=target.closest('[data-edit-post]');
   try{
-    if(profile){event.preventDefault();await showProfile(profile.dataset.profile)}
+    if(postMenu){
+      const menu=document.querySelector(`[data-post-menu-actions="${CSS.escape(postMenu.dataset.postMenu)}"]`);
+      document.querySelectorAll('[data-post-menu-actions]').forEach((item)=>{if(item!==menu)item.classList.add('hidden')});
+      menu?.classList.toggle('hidden');
+    }
+    else if(editPost){
+      const data=await request(`/posts/${editPost.dataset.editPost}`);
+      const post=data.post;
+      state.editingPostId=editPost.dataset.editPost;
+      const form=$('#postEditForm');
+      form.elements.caption.value=post.caption||'';
+      form.elements.location.value=post.location||'';
+      state.editingMedia=(post.media||[]).filter((item)=>item.url).map((item)=>item.url);
+      $('#postEditMedia').innerHTML=state.editingMedia.length?state.editingMedia.map((url,index)=>`<div class="image-preview"><img src="${escapeHtml(url)}" alt="Post photo ${index+1}"><button type="button" data-remove-edit-media="${index}" aria-label="Remove photo">×</button></div>`):'<p class="muted tiny">No photos in this post.</p>';
+      $('#postEditCharCount').textContent=String(form.elements.caption.value.length);
+      $('#postEditMessage').textContent='';
+      $('#postEditDialog').showModal();
+    }
+    else if(target.closest('[data-close-post-edit]'))$('#postEditDialog').close();
+    else if(profile){event.preventDefault();await showProfile(profile.dataset.profile)}
     else if(profileSelf){await showProfile(state.user?.username)}
     else if(target.closest('[data-edit-profile]')){
       const form=$('#profileEditForm');
@@ -287,7 +337,9 @@ document.addEventListener('click',async(event)=>{
       form.elements.username.value=state.user?.username||'';
       form.elements.email.value=state.user?.email||'';
       form.elements.avatarUrl.value=state.user?.avatarUrl||'';
+      form.elements.coverUrl.value=state.user?.coverUrl||'';
       form.elements.bio.value=state.user?.bio||'';
+      form.elements.location.value=state.user?.location||'';
       form.elements.website.value=state.user?.website||'';
       form.elements.birthday.value=state.user?.birthday||'';
       form.elements.pronouns.value=state.user?.pronouns||'';
@@ -381,7 +433,7 @@ $('#profileEditForm').addEventListener('submit',async(event)=>{
   submit.disabled=true;
   try{
     const updatedUsername=form.elements.username.value.trim().toLowerCase();
-    const data=await request('/users/me',{method:'PATCH',body:JSON.stringify({name:form.elements.name.value.trim(),username:updatedUsername,email:form.elements.email.value.trim().toLowerCase(),avatarUrl:form.elements.avatarUrl.value.trim(),bio:form.elements.bio.value,website:form.elements.website.value.trim(),birthday:form.elements.birthday.value,pronouns:form.elements.pronouns.value.trim(),gender:form.elements.gender.value.trim(),isPrivate:form.elements.isPrivate.checked})});
+    const data=await request('/users/me',{method:'PATCH',body:JSON.stringify({name:form.elements.name.value.trim(),username:updatedUsername,email:form.elements.email.value.trim().toLowerCase(),avatarUrl:form.elements.avatarUrl.value.trim(),coverUrl:form.elements.coverUrl.value.trim(),bio:form.elements.bio.value,location:form.elements.location.value.trim(),website:form.elements.website.value.trim(),birthday:form.elements.birthday.value,pronouns:form.elements.pronouns.value.trim(),gender:form.elements.gender.value.trim(),isPrivate:form.elements.isPrivate.checked})});
     state.user={...state.user,...data.user};
     state.currentProfile=state.user.username;
     $('#sideName').textContent=state.user.name;
@@ -396,6 +448,38 @@ $('#profileEditForm').addEventListener('submit',async(event)=>{
   finally{submit.disabled=false}
 });
 $('#profileEditForm').elements.bio.addEventListener('input',(event)=>{$('#profileBioCount').textContent=String(event.currentTarget.value.length)});
+$('#postEditForm').elements.caption.addEventListener('input',(event)=>{$('#postEditCharCount').textContent=String(event.currentTarget.value.length)});
+$('#postEditMedia').addEventListener('click',(event)=>{
+  const remove=event.target.closest('[data-remove-edit-media]');
+  if(!remove)return;
+  state.editingMedia.splice(Number(remove.dataset.removeEditMedia),1);
+  remove.closest('.image-preview')?.remove();
+});
+$('#postEditForm').addEventListener('submit',async(event)=>{
+  event.preventDefault();
+  if(!state.editingPostId)return;
+  const form=event.currentTarget;
+  const submit=form.querySelector('[type=submit]');
+  const message=$('#postEditMessage');
+  submit.disabled=true;
+  message.textContent='';
+  try{
+    const body=new FormData();
+    body.set('caption',form.elements.caption.value);
+    body.set('location',form.elements.location.value.trim());
+    body.set('mediaUrls',JSON.stringify(state.editingMedia||[]));
+    await request(`/posts/${state.editingPostId}`,{method:'PATCH',body});
+    $('#postEditDialog').close();
+    toast('Post updated');
+    if(state.view==='profile')await showProfile(state.currentProfile);
+    else await loadFeed();
+  }catch(error){
+    message.textContent=error.message;
+    message.dataset.state='error';
+  }finally{
+    submit.disabled=false;
+  }
+});
 async function loadTrending(){try{const data=await request('/explore/trending');const tags=data.hashtags||[];$('#trendingList').innerHTML=tags.length?tags.map(t=>{const tag=typeof t==='string'?t:(t.tag||t.hashtag||t.name||'');const count=typeof t==='object'?(t.count||t.score||'') : '';return `<button class="trend-item" data-tag="${escapeHtml(String(tag).replace(/^#/,''))}"><span>#${escapeHtml(String(tag).replace(/^#/,''))}</span><strong>${count?escapeHtml(count):'Explore'} →</strong></button>`}).join(''):'<p class="muted tiny">No trending topics yet. Add a hashtag to your next post.</p>'}catch{$('#trendingList').innerHTML='<p class="muted tiny">Trending topics are temporarily unavailable.</p>'}}
 async function loadSuggestedUsers(){
   const list=$('#suggestedUsers');
@@ -419,8 +503,8 @@ async function loadFollowRequests(){
 function navigate(view){
   state.view=view;
   document.querySelectorAll('[data-view]').forEach((button)=>button.classList.toggle('active',button.dataset.view===view));
-  $('#pageTitle').textContent=view==='feed'?'Home feed':view==='explore'?'Explore':'Notifications';
-  $('#pageEyebrow').textContent=view==='feed'?'YOUR COMMUNITY':view==='explore'?'FIND YOUR PEOPLE':'STAY IN THE LOOP';
+  $('#pageTitle').textContent=view==='feed'?'Home feed':view==='explore'?'Explore':view==='analytics'?'Analytics':'Notifications';
+  $('#pageEyebrow').textContent=view==='feed'?'YOUR COMMUNITY':view==='explore'?'FIND YOUR PEOPLE':view==='analytics'?'YOUR PERFORMANCE':'STAY IN THE LOOP';
   $('#appView').classList.toggle('hidden',view!=='feed');
   $('#simpleView').classList.toggle('hidden',view==='feed');
   if(view==='feed'){loadFeed();return}
@@ -428,6 +512,10 @@ function navigate(view){
   if(view==='explore'){
     box.innerHTML='<p class="eyebrow">DISCOVER SOMETHING NEW</p><h2>Explore the community</h2><p class="muted">Find creators, photos, and hashtags.</p><form id="searchForm" class="search-form"><input name="q" placeholder="Search people or topics…" required><select name="type"><option value="user">People</option><option value="post">Posts</option><option value="hashtag">Hashtags</option></select><button class="button button-primary">Search →</button></form><div id="searchResults"></div>';
     $('#searchForm').addEventListener('submit',(event)=>{event.preventDefault();const form=new FormData(event.currentTarget);searchPosts(form.get('q'),form.get('type'))});
+  }else if(view==='analytics'){
+    const followers=Number(state.user?.followerCount||0);
+    const following=Number(state.user?.followingCount||0);
+    box.innerHTML=`<section class="analytics-view"><div class="analytics-heading"><div><p class="eyebrow">PROFILE PERFORMANCE</p><h2>Social analytics</h2></div><span class="analytics-period">Last 30 days⌄</span></div><div class="analytics-metrics"><article><span class="metric-icon coral">◎</span><div><small>Followers</small><strong>${followers.toLocaleString()}</strong></div><em>+12%</em></article><article><span class="metric-icon violet">◇</span><div><small>Following</small><strong>${following.toLocaleString()}</strong></div><em>+4%</em></article><article><span class="metric-icon mint">♥</span><div><small>Community</small><strong>${(followers+following).toLocaleString()}</strong></div><em>+8%</em></article><article><span class="metric-icon gold">▥</span><div><small>Profile views</small><strong>${Math.max(128,followers*3).toLocaleString()}</strong></div><em>+16%</em></article></div><div class="analytics-grid"><article class="analytics-card"><div class="analytics-card-head"><div><small>Audience growth</small><h3>Reach trend</h3></div><span>6 months⌄</span></div><div class="analytics-bars">${[38,58,46,72,64,88,76,92].map((height,index)=>`<div><i style="height:${height}%"></i><small>${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug'][index]}</small></div>`).join('')}</div></article><article class="analytics-card sentiment-card"><div class="analytics-card-head"><div><small>Community</small><h3>Audience sentiment</h3></div></div><div class="sentiment-ring"><span><strong>86%</strong><small>positive</small></span></div></article></div></section>`;
   }else{
     box.innerHTML='<div class="rail-heading"><div><p class="eyebrow">YOUR ACTIVITY</p><h2>Notifications</h2></div><button id="readAll" class="button button-light">Mark all read</button></div><section class="requests-section"><h3>Follow requests</h3><div id="followRequestsList"><p class="muted tiny">Loading requests…</p></div></section><div id="notificationsList"><div class="empty-state"><div class="loading-spinner"></div><p>Loading notifications…</p></div></div>';
     $('#readAll').addEventListener('click',async()=>{try{await request('/notifications/read-all',{method:'PATCH'});await loadNotifications();await loadUnread()}catch(error){toast(error.message,true)}});
@@ -454,7 +542,9 @@ async function showProfile(username){
     const following=relationship==='accepted'||relationship==='pending';
     const profileDetails=[user.pronouns,user.gender].filter(Boolean).map((detail)=>`<span>${escapeHtml(detail)}</span>`).join('');
     const website=user.website?`<a class="profile-website" href="${escapeHtml(user.website)}" target="_blank" rel="noopener noreferrer">${escapeHtml(user.website.replace(/^https?:\/\//i,'').replace(/\/$/,''))}</a>`:'';
-    const profileHeader=`<section class="profile-header"><div class="profile-avatar-wrap">${avatar(user)}</div><div class="profile-info"><div class="profile-title"><h2>${escapeHtml(user.name||user.username)}</h2>${isSelf?'<button type="button" class="button button-light profile-edit-button" data-edit-profile>Edit profile</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>':`<button type="button" class="follow-button profile-follow" data-follow-user="${escapeHtml(userId)}" data-username="${escapeHtml(user.username)}" data-following="${relationship==='accepted'}" data-relationship="${escapeHtml(relationship)}">${relationship==='accepted'?'Following':relationship==='pending'?'Requested':'Follow'}</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>`}</div><p class="profile-handle">@${escapeHtml(user.username)}</p><div class="profile-stats"><span><strong>${postCount??'—'}</strong><small>posts</small></span><span><strong>${Number(user.followerCount||0)}</strong><small>followers</small></span><span><strong>${Number(user.followingCount||0)}</strong><small>following</small></span></div><p class="profile-bio">${escapeHtml(user.bio||'Sharing little moments and good things.')}</p>${profileDetails||website?`<div class="profile-extra-details">${profileDetails}${website}</div>`:''}${user.isPrivate?'<span class="profile-private-badge">Private account</span>':''}</div></section><div class="profile-post-heading"><span class="profile-tab active"><span>▦</span> Posts</span></div>`;
+    const location=user.location?`<span class="profile-location">⌖ ${escapeHtml(user.location)}</span>`:'';
+    const cover=user.coverUrl?`<div class="profile-cover"><img src="${escapeHtml(user.coverUrl)}" alt=""></div>`:'';
+    const profileHeader=`<section class="profile-header">${cover}<div class="profile-avatar-wrap">${avatar(user)}</div><div class="profile-info"><div class="profile-title"><h2>${escapeHtml(user.name||user.username)}</h2>${isSelf?'<button type="button" class="button button-light profile-edit-button" data-edit-profile>Edit profile</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>':`<button type="button" class="follow-button profile-follow" data-follow-user="${escapeHtml(userId)}" data-username="${escapeHtml(user.username)}" data-following="${relationship==='accepted'}" data-relationship="${escapeHtml(relationship)}">${relationship==='accepted'?'Following':relationship==='pending'?'Requested':'Follow'}</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>`}</div><p class="profile-handle">@${escapeHtml(user.username)}</p><div class="profile-stats"><span><strong>${postCount??'—'}</strong><small>posts</small></span><span><strong>${Number(user.followerCount||0)}</strong><small>followers</small></span><span><strong>${Number(user.followingCount||0)}</strong><small>following</small></span></div><p class="profile-bio">${escapeHtml(user.bio||'Sharing little moments and good things.')}</p>${profileDetails||location||website?`<div class="profile-extra-details">${profileDetails}${location}${website}</div>`:''}${user.isPrivate?'<span class="profile-private-badge">Private account</span>':''}</div></section><div class="profile-post-heading"><span class="profile-tab active"><span>▦</span> Posts</span></div>`;
     if(isSelf||!user.isPrivate||relationship==='accepted'){
       const data=await request(`/users/${encodeURIComponent(username)}/posts?limit=30`);
       const posts=data.items||[];

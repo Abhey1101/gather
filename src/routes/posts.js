@@ -92,6 +92,46 @@ router.get(
   })
 );
 
+router.patch(
+  '/:id',
+  writeLimiter,
+  upload.array('images', 5),
+  validate({
+    params: idParam,
+    body: z.object({
+      caption: z.string().max(2200).default(''),
+      location: z.string().max(100).optional(),
+      mediaUrls: z.preprocess(
+        (value) => {
+          if (typeof value !== 'string') return value;
+          try { return JSON.parse(value); } catch { return []; }
+        },
+        z.array(z.string()).max(5).optional()
+      ),
+    }),
+  }),
+  asyncHandler(async (req, res) => {
+    const post = await Post.findOne({ _id: req.params.id, authorId: req.user.id });
+    if (!post) throw new ApiError(404, 'Post not found');
+
+    const keepUrls = new Set(req.body.mediaUrls || post.media.map((item) => item.url));
+    let media = post.media.filter((item) => keepUrls.has(item.url));
+    if (req.files?.length) {
+      const uploadImage = process.env.CLOUDINARY_URL ? uploadToCloudinary : uploadLocally;
+      media = [...media, ...(await Promise.all(req.files.map(uploadImage)))].slice(0, 5);
+    }
+    if (!req.body.caption.trim() && !media.length) throw new ApiError(400, 'A post needs a caption or media');
+
+    post.caption = req.body.caption;
+    post.location = req.body.location || '';
+    post.media = media;
+    post.hashtags = extractHashtags(req.body.caption);
+    await post.save();
+    await trendingBump(post.hashtags);
+    res.json({ post: await hydrate([String(post._id)], req.user.id).then((items) => items[0] || post) });
+  })
+);
+
 router.get(
   '/:id',
   validate({ params: idParam }),

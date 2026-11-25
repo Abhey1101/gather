@@ -17,7 +17,7 @@ import { hydrate } from '../services/feed.service.js';
 const router = Router();
 router.use(requireAuth);
 
-const PROFILE_FIELDS = 'name username avatarUrl bio website pronouns gender isPrivate followerCount followingCount createdAt';
+const PROFILE_FIELDS = 'name username avatarUrl coverUrl bio location website pronouns gender isPrivate followerCount followingCount createdAt';
 const EDITABLE_PROFILE_FIELDS = `${PROFILE_FIELDS} email birthday`;
 const birthdaySchema = z.union([
   z.literal(''),
@@ -55,7 +55,9 @@ router.patch(
       username: z.string().trim().toLowerCase().regex(/^[a-z0-9_.]{3,30}$/, '3-30 chars: a-z 0-9 _ .').optional(),
       email: z.string().trim().toLowerCase().email().optional(),
       bio: z.string().max(160).optional(),
+      location: z.string().trim().max(100).optional(),
       avatarUrl: z.union([z.string().url(), z.literal('')]).optional(),
+      coverUrl: z.union([z.string().url(), z.literal('')]).optional(),
       website: websiteSchema.optional(),
       birthday: birthdaySchema.optional(),
       pronouns: z.string().max(40).optional(),

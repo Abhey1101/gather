@@ -707,12 +707,27 @@ select {
   margin-bottom: 17px;
 }
 
-.profile-stats span {
+.profile-stats > span,
+.profile-stats > button {
   display: flex;
   align-items: baseline;
   gap: 5px;
   color: var(--muted);
   font-size: 11px;
+}
+
+.profile-stat-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.profile-stat-link:hover strong {
+  color: var(--purple);
+  text-decoration: underline;
 }
 
 .profile-stats strong {
@@ -858,7 +873,6 @@ select {
   padding: 42px 20px;
 }
 
-.profile-dialog,
 .post-menu-wrap {
   position: relative;
   margin-left: auto;
@@ -900,6 +914,7 @@ select {
   flex-wrap: wrap;
 }
 
+.profile-dialog,
 .profile-post-dialog {
   width: min(480px, calc(100vw - 28px));
   max-width: none;
@@ -910,6 +925,46 @@ select {
   border-radius: 20px;
   background: #fffefa;
   box-shadow: 0 28px 90px #22183544;
+}
+
+.profile-connections-dialog {
+  width: min(460px, calc(100vw - 28px));
+  max-height: min(80vh, 680px);
+  padding: 0 18px 18px;
+  overflow: auto;
+  border: 1px solid #eee9ee;
+  border-radius: 20px;
+  background: #fffefa;
+  color: var(--ink);
+  box-shadow: 0 28px 90px #22183544;
+}
+
+.profile-connections-dialog::backdrop {
+  background: #211a2d85;
+  backdrop-filter: blur(4px);
+}
+
+.profile-connections-dialog .comments-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0 -18px;
+  background: inherit;
+}
+
+.profile-connections-list {
+  display: grid;
+  min-height: 100px;
+  max-height: 55vh;
+  overflow: auto;
+}
+
+.connection-user {
+  padding: 12px 0;
+}
+
+.profile-connections-dialog > .button {
+  margin-top: 12px;
 }
 
 .profile-dialog::backdrop,
@@ -1165,7 +1220,8 @@ select {
     margin-bottom: 12px;
   }
 
-  .profile-stats span {
+  .profile-stats > span,
+  .profile-stats > button {
     display: grid;
     gap: 0;
     font-size: 9px;
@@ -1222,7 +1278,7 @@ select {
   font-size: 28px;
 }
 
-.analytics-period,
+.analytics-period-label select,
 .analytics-card-head > span {
   padding: 8px 11px;
   border: 1px solid var(--line);
@@ -1230,6 +1286,17 @@ select {
   background: #fff;
   color: var(--muted);
   font-size: 10px;
+}
+
+.analytics-period-label select {
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.analytics-period-label select:focus-visible {
+  outline: 2px solid var(--purple);
+  outline-offset: 2px;
 }
 
 .analytics-metrics {
@@ -1317,15 +1384,17 @@ select {
   align-items: flex-end;
   gap: 10px;
   height: 220px;
+  overflow-x: auto;
   padding-top: 18px;
   border-bottom: 1px solid var(--line);
   background: repeating-linear-gradient(to bottom, transparent 0 54px, #f1edf3 55px);
 }
 
-.analytics-bars div {
+.analytics-bar {
   display: flex;
   height: 100%;
-  flex: 1;
+  min-width: 24px;
+  flex: 1 0 24px;
   align-items: center;
   justify-content: flex-end;
   flex-direction: column;
@@ -1343,41 +1412,15 @@ select {
 .analytics-bars small {
   color: var(--muted);
   font-size: 8px;
+  white-space: nowrap;
 }
 
-.sentiment-ring {
-  display: grid;
-  width: 170px;
-  height: 170px;
-  margin: 28px auto 0;
-  place-items: center;
-  border-radius: 50%;
-  background: conic-gradient(#7754c8 0 86%, #efc0a9 86% 100%);
-  position: relative;
-}
-
-.sentiment-ring::after {
-  position: absolute;
-  width: 118px;
-  height: 118px;
-  border-radius: 50%;
-  background: #fff;
-  content: '';
-}
-
-.sentiment-ring span {
-  z-index: 1;
-  display: grid;
-  text-align: center;
-}
-
-.sentiment-ring strong {
-  font-size: 25px;
-}
-
-.sentiment-ring small {
+.analytics-note p {
+  max-width: 420px;
+  margin: 24px 0;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 12px;
+  line-height: 1.8;
 }
 
 :root[data-theme="dark"] {
@@ -1398,11 +1441,12 @@ select {
 :root[data-theme="dark"] .top-actions .theme-toggle,
 :root[data-theme="dark"] .analytics-metrics article,
 :root[data-theme="dark"] .analytics-card,
-:root[data-theme="dark"] .analytics-period,
+:root[data-theme="dark"] .analytics-period-label select,
 :root[data-theme="dark"] .analytics-card-head > span,
 :root[data-theme="dark"] .post-menu-actions,
 :root[data-theme="dark"] .profile-dialog,
 :root[data-theme="dark"] .profile-post-dialog,
+:root[data-theme="dark"] .profile-connections-dialog,
 :root[data-theme="dark"] .requests-section {
   background: #211d29;
   color: var(--ink);
@@ -1411,7 +1455,7 @@ select {
 
 :root[data-theme="dark"] .simple-card,
 :root[data-theme="dark"] .composer textarea,
-:root[data-theme="dark"] .sentiment-ring::after {
+:root[data-theme="dark"] .analytics-period-label select {
   background: #211d29;
   color: var(--ink);
 }

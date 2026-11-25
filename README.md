@@ -102,8 +102,8 @@ GitHub Actions workflow in `.github/workflows/ci.yml` runs it against Mongo and 
 | Feed | `GET /api/feed?cursor=&limit=10` |
 | Posts | `POST /api/posts` (JSON `mediaUrls` or multipart `images`, up to 5) · `GET/DELETE /api/posts/:id` · `POST/DELETE /api/posts/:id/like` · `…/save` · `GET /api/posts/saved` · `POST /api/posts/:id/report` |
 | Comments | `POST/GET /api/posts/:id/comments` (with `parentId` for replies, `@mentions` notify) · `DELETE /api/posts/:postId/comments/:commentId` |
-| Social graph | `POST/DELETE /api/users/:id/follow` · `GET /api/follow-requests` · `PATCH /api/follow-requests/:id/accept\|reject` · `POST/DELETE /api/users/:id/block` · `GET /api/users/suggested` |
-| Profiles | `GET /api/users/:username` · `GET /api/users/:username/posts` · `PATCH /api/users/me` |
+| Social graph | `POST/DELETE /api/users/:id/follow` · `GET /api/users/:username/followers\|following` · `GET /api/follow-requests` · `PATCH /api/follow-requests/:id/accept\|reject` · `POST/DELETE /api/users/:id/block` · `GET /api/users/suggested` |
+| Profiles | `GET /api/users/:username` · `GET /api/users/:username/posts` · `GET /api/users/me/analytics?period=1d\|7d\|30d` · `PATCH /api/users/me` |
 | Notifications | `GET /api/notifications?cursor=` · `GET …/unread-count` · `PATCH …/read-all` · `PATCH …/:id/read` |
 | Explore | `GET /api/explore/trending` · `GET /api/search?q=&type=user\|post\|hashtag` |
 | Socket events | server → client: `notification:new`, `post:liked`, `comment:new` · client → server: `post:watch`, `post:unwatch` |

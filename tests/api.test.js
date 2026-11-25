@@ -10,6 +10,7 @@ process.env.CELEB_THRESHOLD = '10000';
 
 const { default: request } = await import('supertest');
 const { default: mongoose } = await import('mongoose');
+const { ProfileView } = await import('../src/models/ProfileView.js');
 const { createApp } = await import('../src/app.js');
 const { connectMongo } = await import('../src/config/db.js');
 const { redis } = await import('../src/config/redis.js');
@@ -95,6 +96,36 @@ test('profile details can be updated while email stays private', async () => {
   assert.equal(invalidWebsite.status, 400);
 });
 
+test('profile analytics counts unique real visits over supported periods', async () => {
+  const owner = await request(app).post('/api/auth/register').send({
+    name: 'Analytics Owner', username: 'analytics_owner', email: 'analytics-owner@test.dev', password: 'Password123!',
+  });
+  const visitor = await request(app).post('/api/auth/register').send({
+    name: 'Analytics Visitor', username: 'analytics_visitor', email: 'analytics-visitor@test.dev', password: 'Password123!',
+  });
+  const ownerAuth = { authorization: `Bearer ${owner.body.accessToken}` };
+  const visitorAuth = { authorization: `Bearer ${visitor.body.accessToken}` };
+
+  assert.equal((await request(app).get('/api/users/analytics_owner').set(visitorAuth)).status, 200);
+  assert.equal((await request(app).get('/api/users/analytics_owner').set(visitorAuth)).status, 200);
+  assert.equal((await request(app).get('/api/users/analytics_owner').set(ownerAuth)).status, 200);
+  const eightDaysAgo = new Date(Date.now() - 8 * 24 * 60 * 60 * 1000);
+  await ProfileView.create({
+    profileId: owner.body.user.id,
+    viewerId: visitor.body.user.id,
+    viewedAt: eightDaysAgo,
+    viewDate: new Date(Date.UTC(eightDaysAgo.getUTCFullYear(), eightDaysAgo.getUTCMonth(), eightDaysAgo.getUTCDate())),
+  });
+
+  for (const [period, expectedViews] of [['1d', 1], ['7d', 1], ['30d', 2]]) {
+    const analytics = await request(app).get('/api/users/me/analytics').query({ period }).set(ownerAuth);
+    assert.equal(analytics.status, 200, JSON.stringify(analytics.body));
+    assert.equal(analytics.body.profileViews, expectedViews);
+    assert.equal(analytics.body.buckets.reduce((sum, bucket) => sum + bucket.count, 0), expectedViews);
+  }
+  assert.equal((await request(app).get('/api/users/me/analytics').query({ period: '90d' }).set(ownerAuth)).status, 400);
+});
+
 test('photo posts use local storage when Cloudinary is not configured', async () => {
   const configuredCloudinary = process.env.CLOUDINARY_URL;
   delete process.env.CLOUDINARY_URL;
@@ -138,6 +169,12 @@ test('follow is idempotent and counters stay correct', async () => {
   assert.equal(a.status, 201);
   assert.equal(b.status, 200);
   assert.equal(b.body.changed, false);
+  const followers = await request(app).get('/api/users/alice/followers').set(auth('alice'));
+  const following = await request(app).get('/api/users/bob/following').set(auth('bob'));
+  assert.equal(followers.status, 200);
+  assert.ok(followers.body.items.some((user) => user.username === 'bob'));
+  assert.equal(following.status, 200);
+  assert.ok(following.body.items.some((user) => user.username === 'alice'));
   const profile = await request(app).get('/api/users/alice').set(auth('bob'));
   assert.equal(profile.body.user.followerCount, 1);
   assert.equal(profile.body.relationship, 'accepted');
@@ -224,6 +261,8 @@ test('private accounts require an accepted follow request', async () => {
   assert.equal(res.body.status, 'pending');
   const denied = await request(app).get('/api/users/carol/posts').set(auth('bob'));
   assert.equal(denied.status, 403);
+  const deniedConnections = await request(app).get('/api/users/carol/followers').set(auth('bob'));
+  assert.equal(deniedConnections.status, 403);
 
   const pending = await request(app).get('/api/follow-requests').set(auth('carol'));
   const reqId = pending.body.requests[0].id;
@@ -236,4 +275,7 @@ test('private accounts require an accepted follow request', async () => {
   assert.equal(profile.body.user.followerCount, 1, 'counter incremented exactly once');
   const ok = await request(app).get('/api/users/carol/posts').set(auth('bob'));
   assert.equal(ok.status, 200);
+  const acceptedConnections = await request(app).get('/api/users/carol/followers').set(auth('bob'));
+  assert.equal(acceptedConnections.status, 200);
+  assert.ok(acceptedConnections.body.items.some((user) => user.username === 'bob'));
 });

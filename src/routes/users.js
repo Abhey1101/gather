@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { User } from '../models/User.js';
 import { Follow } from '../models/Follow.js';
+import { ProfileView } from '../models/ProfileView.js';
 import { Post } from '../models/Post.js';
 import { Block } from '../models/Block.js';
 import { validate } from '../middleware/validate.js';
@@ -38,12 +39,98 @@ const websiteSchema = z.union([
 ]);
 const eitherBlocked = (a, b) => Block.exists({ $or: [{ blockerId: a, blockedId: b }, { blockerId: b, blockedId: a }] });
 
+async function getConnections(req, res, direction) {
+  const profile = await User.findOne({ username: req.params.username }).select('_id isPrivate').lean();
+  if (!profile || (await eitherBlocked(req.user.id, profile._id))) throw new ApiError(404, 'User not found');
+  await assertCanView(req.user.id, profile._id);
+
+  const relevantBlocks = await Block.find({
+    $or: [
+      { blockerId: profile._id }, { blockedId: profile._id },
+      { blockerId: req.user.id }, { blockedId: req.user.id },
+    ],
+  }).select('blockerId blockedId').lean();
+  const excluded = new Set([String(profile._id)]);
+  for (const block of relevantBlocks) {
+    if ([String(profile._id), req.user.id].includes(String(block.blockerId))) excluded.add(String(block.blockedId));
+    if ([String(profile._id), req.user.id].includes(String(block.blockedId))) excluded.add(String(block.blockerId));
+  }
+
+  const filter = direction === 'followers'
+    ? { followingId: profile._id, followerId: { $nin: [...excluded] }, status: 'accepted' }
+    : { followerId: profile._id, followingId: { $nin: [...excluded] }, status: 'accepted' };
+  const { items, nextCursor } = await paginate(Follow, filter, {
+    cursor: req.query.cursor,
+    limit: req.query.limit,
+    select: 'followerId followingId createdAt',
+  });
+  const userIds = items.map((item) => direction === 'followers' ? item.followerId : item.followingId);
+  const [users, relationships] = await Promise.all([
+    User.find({ _id: { $in: userIds } }).select(PROFILE_FIELDS).lean(),
+    Follow.find({ followerId: req.user.id, followingId: { $in: userIds } }).select('followingId status').lean(),
+  ]);
+  const userById = new Map(users.map((user) => [String(user._id), user]));
+  const relationshipById = new Map(relationships.map((relation) => [String(relation.followingId), relation.status]));
+  res.json({
+    items: userIds.flatMap((id) => {
+      const user = userById.get(String(id));
+      return user ? [{ ...user, relationship: relationshipById.get(String(user._id)) || 'none' }] : [];
+    }),
+    nextCursor,
+  });
+}
+
 router.get(
   '/me',
   asyncHandler(async (req, res) => {
     const user = await User.findById(req.user.id).select(EDITABLE_PROFILE_FIELDS).lean();
     if (!user) throw new ApiError(404, 'User not found');
     res.json({ user });
+  })
+);
+
+router.get(
+  '/me/analytics',
+  validate({ query: z.object({ period: z.enum(['1d', '7d', '30d']).default('30d') }) }),
+  asyncHandler(async (req, res) => {
+    const now = new Date();
+    const period = req.query.period;
+    const hours = period === '1d' ? 24 : period === '7d' ? 24 * 7 : 24 * 30;
+    const start = new Date(now.getTime() - hours * 60 * 60 * 1000);
+    const unit = period === '1d' ? 'hour' : 'day';
+    const user = await User.findById(req.user.id).select('followerCount followingCount').lean();
+    if (!user) throw new ApiError(404, 'User not found');
+    const groupedViews = await ProfileView.aggregate([
+      { $match: { profileId: user._id, viewedAt: { $gte: start, $lte: now } } },
+      { $group: { _id: { $dateTrunc: { date: '$viewedAt', unit } }, count: { $sum: 1 } } },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const bucketCount = period === '1d' ? 24 : period === '7d' ? 7 : 30;
+    const bucketStart = new Date(now);
+    if (unit === 'hour') {
+      bucketStart.setUTCMinutes(0, 0, 0);
+      bucketStart.setUTCHours(bucketStart.getUTCHours() - (bucketCount - 1));
+    } else {
+      bucketStart.setUTCHours(0, 0, 0, 0);
+      bucketStart.setUTCDate(bucketStart.getUTCDate() - (bucketCount - 1));
+    }
+
+    const counts = new Map(groupedViews.map(({ _id, count }) => [new Date(_id).toISOString(), count]));
+    const buckets = Array.from({ length: bucketCount }, (_, index) => {
+      const date = new Date(bucketStart);
+      if (unit === 'hour') date.setUTCHours(date.getUTCHours() + index);
+      else date.setUTCDate(date.getUTCDate() + index);
+      return { date: date.toISOString(), count: counts.get(date.toISOString()) || 0 };
+    });
+
+    res.json({
+      period,
+      profileViews: groupedViews.reduce((sum, item) => sum + item.count, 0),
+      followers: user.followerCount,
+      following: user.followingCount,
+      buckets,
+    });
   })
 );
 
@@ -103,6 +190,15 @@ router.get(
     if (!isSelf) delete user.birthday;
     const rel = isSelf ? null : await Follow.findOne({ followerId: req.user.id, followingId: user._id }).select('status').lean();
     const canView = isSelf || !user.isPrivate || rel?.status === 'accepted';
+    if (canView && !isSelf) {
+      const viewedAt = new Date();
+      const viewDate = new Date(Date.UTC(viewedAt.getUTCFullYear(), viewedAt.getUTCMonth(), viewedAt.getUTCDate()));
+      try {
+        await ProfileView.create({ profileId: user._id, viewerId: req.user.id, viewedAt, viewDate });
+      } catch (error) {
+        if (error.code !== 11000) throw error;
+      }
+    }
     res.json({
       user,
       isSelf,
@@ -110,6 +206,18 @@ router.get(
       postCount: canView ? await Post.countDocuments({ authorId: user._id }) : null,
     });
   })
+);
+
+router.get(
+  '/:username/followers',
+  validate({ params: z.object({ username: z.string().toLowerCase() }), query: pageQuery }),
+  asyncHandler((req, res) => getConnections(req, res, 'followers'))
+);
+
+router.get(
+  '/:username/following',
+  validate({ params: z.object({ username: z.string().toLowerCase() }), query: pageQuery }),
+  asyncHandler((req, res) => getConnections(req, res, 'following'))
 );
 
 router.get(

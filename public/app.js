@@ -1,5 +1,5 @@
 const API = '/api';
-const state = { accessToken: localStorage.getItem('gather_access') || '', refreshToken: localStorage.getItem('gather_refresh') || '', user: null, authMode: 'login', view: 'feed', cursor: null, loading: false, selectedImages: [], existingMedia: [], previewUrls: [], commentPostId: null, editingPostId: null, profilePosts: [] };
+const state = { accessToken: localStorage.getItem('gather_access') || '', refreshToken: localStorage.getItem('gather_refresh') || '', user: null, authMode: 'login', view: 'feed', cursor: null, loading: false, selectedImages: [], existingMedia: [], previewUrls: [], commentPostId: null, editingPostId: null, profilePosts: [], analyticsRequest: 0, connections: null };
 const $ = (s) => document.querySelector(s);
 const escapeHtml = (v='') => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const avatar = (user={}) => user.avatarUrl ? `<div class="avatar"><img src="${escapeHtml(user.avatarUrl)}" alt=""></div>` : `<div class="avatar">${escapeHtml((user.name || user.username || 'G').slice(0,1).toUpperCase())}</div>`;
@@ -307,8 +307,24 @@ document.addEventListener('click',async(event)=>{
   const profilePost=target.closest('[data-profile-post]');
   const postMenu=target.closest('[data-post-menu]');
   const editPost=target.closest('[data-edit-post]');
+  const profileList=target.closest('[data-profile-list]');
   try{
-    if(postMenu){
+    if(target.closest('[data-retry-analytics]')){
+      await loadAnalytics(target.closest('[data-retry-analytics]').dataset.retryAnalytics);
+    }
+    else if(target.closest('[data-retry-connections]')){
+      await loadConnectionPage();
+    }
+    else if(profileList){
+      await showConnections(profileList.dataset.username,profileList.dataset.profileList);
+    }
+    else if(target.closest('[data-close-connections]')){
+      $('#profileConnectionsDialog').close();
+    }
+    else if(target.closest('#profileConnectionsMore')){
+      await loadConnectionPage(true);
+    }
+    else if(postMenu){
       const menu=document.querySelector(`[data-post-menu-actions="${CSS.escape(postMenu.dataset.postMenu)}"]`);
       document.querySelectorAll('[data-post-menu-actions]').forEach((item)=>{if(item!==menu)item.classList.add('hidden')});
       menu?.classList.toggle('hidden');
@@ -327,7 +343,7 @@ document.addEventListener('click',async(event)=>{
       $('#postEditDialog').showModal();
     }
     else if(target.closest('[data-close-post-edit]'))$('#postEditDialog').close();
-    else if(profile){event.preventDefault();await showProfile(profile.dataset.profile)}
+    else if(profile){event.preventDefault();if($('#profileConnectionsDialog').open)$('#profileConnectionsDialog').close();await showProfile(profile.dataset.profile)}
     else if(profileSelf){await showProfile(state.user?.username)}
     else if(target.closest('[data-edit-profile]')){
       const form=$('#profileEditForm');
@@ -409,10 +425,15 @@ document.addEventListener('click',async(event)=>{
       follow.disabled=true;
       const isFollowing=follow.dataset.following==='true';
       const isPending=follow.dataset.relationship==='pending';
-      const method=isFollowing?'DELETE':'POST';
+      const method=isFollowing||isPending?'DELETE':'POST';
       const result=await request(`/users/${follow.dataset.followUser}/follow`,{method});
-      toast(isFollowing?(isPending?'Follow request cancelled':'You unfollowed this person'):result.status==='pending'?'Follow request sent':'You are now following this person');
-      if(state.view==='profile')await showProfile(follow.dataset.username);
+      toast(isFollowing||isPending?(isPending?'Follow request cancelled':'You unfollowed this person'):result.status==='pending'?'Follow request sent':'You are now following this person');
+      if(follow.closest('#profileConnectionsList')){
+        const {username,direction}=state.connections;
+        await showProfile(state.currentProfile);
+        await showConnections(username,direction);
+      }
+      else if(state.view==='profile')await showProfile(follow.dataset.username);
       else await loadSuggestedUsers();
     }
     else if(followRequest){
@@ -500,6 +521,63 @@ async function loadFollowRequests(){
     panel.innerHTML=requests.length?requests.map((request)=>`<article class="suggested-user follow-request">${avatar(request.user)}<button type="button" class="suggested-user-copy" data-profile="${escapeHtml(request.user.username)}"><strong>${escapeHtml(request.user.name||request.user.username)}</strong><span>@${escapeHtml(request.user.username)} wants to follow you</span></button><button type="button" class="follow-button" data-follow-request="${escapeHtml(request.id)}" data-action="accept">Accept</button><button type="button" class="text-button request-decline" data-follow-request="${escapeHtml(request.id)}" data-action="reject">Decline</button></article>`).join(''):'<p class="muted tiny">No pending follow requests.</p>';
   }catch(error){panel.innerHTML=`<p class="form-message" data-state="error">${escapeHtml(error.message)}</p>`}
 }
+async function loadAnalytics(period='30d'){
+  const requestId=++state.analyticsRequest;
+  const content=$('#analyticsContent');
+  if(!content)return;
+  content.innerHTML='<div class="empty-state"><div class="loading-spinner"></div><p>Loading analytics…</p></div>';
+  try{
+    const data=await request(`/users/me/analytics?period=${encodeURIComponent(period)}`);
+    if(requestId!==state.analyticsRequest)return;
+    const labels={'1d':'Last 24 hours','7d':'Last 7 days','30d':'Last 30 days'};
+    const maximum=Math.max(1,...data.buckets.map((bucket)=>bucket.count));
+    const formatter=period==='1d'
+      ?new Intl.DateTimeFormat(undefined,{hour:'numeric'})
+      :new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric'});
+    const bars=data.buckets.map((bucket,index)=>{
+      const label=period==='30d'&&index%5!==0?'':formatter.format(new Date(bucket.date));
+      return `<div class="analytics-bar" title="${escapeHtml(formatter.format(new Date(bucket.date)))}: ${bucket.count} views"><i style="height:${Math.round(bucket.count/maximum*100)}%"></i><small>${escapeHtml(label)}</small></div>`;
+    }).join('');
+    content.innerHTML=`<div class="analytics-heading"><div><p class="eyebrow">PROFILE PERFORMANCE</p><h2>Social analytics</h2></div><label class="analytics-period-label"><span class="visually-hidden">Analytics date range</span><select id="analyticsPeriod"><option value="1d"${period==='1d'?' selected':''}>Last day</option><option value="7d"${period==='7d'?' selected':''}>Last 7 days</option><option value="30d"${period==='30d'?' selected':''}>Last 30 days</option></select></label></div><div class="analytics-metrics"><article><span class="metric-icon gold">▥</span><div><small>Profile views</small><strong>${Number(data.profileViews).toLocaleString()}</strong></div></article><article><span class="metric-icon coral">◎</span><div><small>Followers</small><strong>${Number(data.followers).toLocaleString()}</strong></div></article><article><span class="metric-icon violet">◇</span><div><small>Following</small><strong>${Number(data.following).toLocaleString()}</strong></div></article><article><span class="metric-icon mint">♥</span><div><small>Community</small><strong>${(Number(data.followers)+Number(data.following)).toLocaleString()}</strong></div></article></div><div class="analytics-grid"><article class="analytics-card"><div class="analytics-card-head"><div><small>Unique visitors</small><h3>Profile views · ${labels[period]}</h3></div></div><div class="analytics-bars">${bars}</div></article><article class="analytics-card analytics-note"><div class="analytics-card-head"><div><small>How this is counted</small><h3>Real profile visits</h3></div></div><p>Views count when another signed-in member visits your profile. The same person counts once per day, so refreshing won’t inflate your total.</p></article></div>`;
+    $('#analyticsPeriod').addEventListener('change',(event)=>loadAnalytics(event.currentTarget.value));
+  }catch(error){
+    if(requestId===state.analyticsRequest)content.innerHTML=`<div class="empty-state"><strong>Couldn't load analytics</strong><p>${escapeHtml(error.message)}</p><button class="button button-light" type="button" data-retry-analytics="${escapeHtml(period)}">Try again</button></div>`;
+  }
+}
+async function loadConnectionPage(append=false){
+  const connections=state.connections;
+  if(!connections||connections.loading)return;
+  connections.loading=true;
+  const list=$('#profileConnectionsList');
+  if(!append)list.innerHTML='<div class="empty-state"><div class="loading-spinner"></div><p>Loading people…</p></div>';
+  try{
+    const query=new URLSearchParams({limit:'30'});
+    if(append&&connections.cursor)query.set('cursor',connections.cursor);
+    const data=await request(`/users/${encodeURIComponent(connections.username)}/${connections.direction}?${query}`);
+    connections.cursor=data.nextCursor||null;
+    const users=data.items||[];
+    const rows=users.map((user)=>{
+      const relationship=user.relationship||'none';
+      const followButton=user._id===state.user?.id?'':`<button type="button" class="follow-button" data-follow-user="${escapeHtml(user._id)}" data-username="${escapeHtml(user.username)}" data-following="${relationship==='accepted'}" data-relationship="${escapeHtml(relationship)}">${relationship==='accepted'?'Following':relationship==='pending'?'Requested':'Follow'}</button>`;
+      return `<article class="suggested-user connection-user">${avatar(user)}<button type="button" class="suggested-user-copy" data-profile="${escapeHtml(user.username)}"><strong>${escapeHtml(user.name||user.username)}</strong><span>@${escapeHtml(user.username)}</span></button>${followButton}</article>`;
+    }).join('');
+    if(!append)list.innerHTML=rows||'<div class="empty-state"><p>No people to show yet.</p></div>';
+    else list.insertAdjacentHTML('beforeend',rows);
+    $('#profileConnectionsMore').classList.toggle('hidden',!connections.cursor);
+  }catch(error){
+    if(!append)list.innerHTML=`<div class="empty-state"><strong>Couldn't load people</strong><p>${escapeHtml(error.message)}</p><button class="button button-light" type="button" data-retry-connections>Try again</button></div>`;
+    else toast(error.message,true);
+  }finally{
+    connections.loading=false;
+  }
+}
+async function showConnections(username,direction){
+  state.connections={username,direction,cursor:null,loading:false};
+  $('#profileConnectionsTitle').textContent=direction==='followers'?'Followers':'Following';
+  $('#profileConnectionsMore').classList.add('hidden');
+  $('#profileConnectionsDialog').showModal();
+  await loadConnectionPage();
+}
 function navigate(view){
   state.view=view;
   document.querySelectorAll('[data-view]').forEach((button)=>button.classList.toggle('active',button.dataset.view===view));
@@ -513,9 +591,8 @@ function navigate(view){
     box.innerHTML='<p class="eyebrow">DISCOVER SOMETHING NEW</p><h2>Explore the community</h2><p class="muted">Find creators, photos, and hashtags.</p><form id="searchForm" class="search-form"><input name="q" placeholder="Search people or topics…" required><select name="type"><option value="user">People</option><option value="post">Posts</option><option value="hashtag">Hashtags</option></select><button class="button button-primary">Search →</button></form><div id="searchResults"></div>';
     $('#searchForm').addEventListener('submit',(event)=>{event.preventDefault();const form=new FormData(event.currentTarget);searchPosts(form.get('q'),form.get('type'))});
   }else if(view==='analytics'){
-    const followers=Number(state.user?.followerCount||0);
-    const following=Number(state.user?.followingCount||0);
-    box.innerHTML=`<section class="analytics-view"><div class="analytics-heading"><div><p class="eyebrow">PROFILE PERFORMANCE</p><h2>Social analytics</h2></div><span class="analytics-period">Last 30 days⌄</span></div><div class="analytics-metrics"><article><span class="metric-icon coral">◎</span><div><small>Followers</small><strong>${followers.toLocaleString()}</strong></div><em>+12%</em></article><article><span class="metric-icon violet">◇</span><div><small>Following</small><strong>${following.toLocaleString()}</strong></div><em>+4%</em></article><article><span class="metric-icon mint">♥</span><div><small>Community</small><strong>${(followers+following).toLocaleString()}</strong></div><em>+8%</em></article><article><span class="metric-icon gold">▥</span><div><small>Profile views</small><strong>${Math.max(128,followers*3).toLocaleString()}</strong></div><em>+16%</em></article></div><div class="analytics-grid"><article class="analytics-card"><div class="analytics-card-head"><div><small>Audience growth</small><h3>Reach trend</h3></div><span>6 months⌄</span></div><div class="analytics-bars">${[38,58,46,72,64,88,76,92].map((height,index)=>`<div><i style="height:${height}%"></i><small>${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug'][index]}</small></div>`).join('')}</div></article><article class="analytics-card sentiment-card"><div class="analytics-card-head"><div><small>Community</small><h3>Audience sentiment</h3></div></div><div class="sentiment-ring"><span><strong>86%</strong><small>positive</small></span></div></article></div></section>`;
+    box.innerHTML='<section id="analyticsContent" class="analytics-view"></section>';
+    loadAnalytics();
   }else{
     box.innerHTML='<div class="rail-heading"><div><p class="eyebrow">YOUR ACTIVITY</p><h2>Notifications</h2></div><button id="readAll" class="button button-light">Mark all read</button></div><section class="requests-section"><h3>Follow requests</h3><div id="followRequestsList"><p class="muted tiny">Loading requests…</p></div></section><div id="notificationsList"><div class="empty-state"><div class="loading-spinner"></div><p>Loading notifications…</p></div></div>';
     $('#readAll').addEventListener('click',async()=>{try{await request('/notifications/read-all',{method:'PATCH'});await loadNotifications();await loadUnread()}catch(error){toast(error.message,true)}});
@@ -544,7 +621,7 @@ async function showProfile(username){
     const website=user.website?`<a class="profile-website" href="${escapeHtml(user.website)}" target="_blank" rel="noopener noreferrer">${escapeHtml(user.website.replace(/^https?:\/\//i,'').replace(/\/$/,''))}</a>`:'';
     const location=user.location?`<span class="profile-location">⌖ ${escapeHtml(user.location)}</span>`:'';
     const cover=user.coverUrl?`<div class="profile-cover"><img src="${escapeHtml(user.coverUrl)}" alt=""></div>`:'';
-    const profileHeader=`<section class="profile-header">${cover}<div class="profile-avatar-wrap">${avatar(user)}</div><div class="profile-info"><div class="profile-title"><h2>${escapeHtml(user.name||user.username)}</h2>${isSelf?'<button type="button" class="button button-light profile-edit-button" data-edit-profile>Edit profile</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>':`<button type="button" class="follow-button profile-follow" data-follow-user="${escapeHtml(userId)}" data-username="${escapeHtml(user.username)}" data-following="${relationship==='accepted'}" data-relationship="${escapeHtml(relationship)}">${relationship==='accepted'?'Following':relationship==='pending'?'Requested':'Follow'}</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>`}</div><p class="profile-handle">@${escapeHtml(user.username)}</p><div class="profile-stats"><span><strong>${postCount??'—'}</strong><small>posts</small></span><span><strong>${Number(user.followerCount||0)}</strong><small>followers</small></span><span><strong>${Number(user.followingCount||0)}</strong><small>following</small></span></div><p class="profile-bio">${escapeHtml(user.bio||'Sharing little moments and good things.')}</p>${profileDetails||location||website?`<div class="profile-extra-details">${profileDetails}${location}${website}</div>`:''}${user.isPrivate?'<span class="profile-private-badge">Private account</span>':''}</div></section><div class="profile-post-heading"><span class="profile-tab active"><span>▦</span> Posts</span></div>`;
+    const profileHeader=`<section class="profile-header">${cover}<div class="profile-avatar-wrap">${avatar(user)}</div><div class="profile-info"><div class="profile-title"><h2>${escapeHtml(user.name||user.username)}</h2>${isSelf?'<button type="button" class="button button-light profile-edit-button" data-edit-profile>Edit profile</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>':`<button type="button" class="follow-button profile-follow" data-follow-user="${escapeHtml(userId)}" data-username="${escapeHtml(user.username)}" data-following="${relationship==='accepted'}" data-relationship="${escapeHtml(relationship)}">${relationship==='accepted'?'Following':relationship==='pending'?'Requested':'Follow'}</button><button type="button" class="button button-light profile-share-button" data-share-profile>Share profile</button>`}</div><p class="profile-handle">@${escapeHtml(user.username)}</p><div class="profile-stats"><span><strong>${postCount??'—'}</strong><small>posts</small></span><button type="button" class="profile-stat-link" data-profile-list="followers" data-username="${escapeHtml(user.username)}"><strong>${Number(user.followerCount||0)}</strong><small>followers</small></button><button type="button" class="profile-stat-link" data-profile-list="following" data-username="${escapeHtml(user.username)}"><strong>${Number(user.followingCount||0)}</strong><small>following</small></button></div><p class="profile-bio">${escapeHtml(user.bio||'Sharing little moments and good things.')}</p>${profileDetails||location||website?`<div class="profile-extra-details">${profileDetails}${location}${website}</div>`:''}${user.isPrivate?'<span class="profile-private-badge">Private account</span>':''}</div></section><div class="profile-post-heading"><span class="profile-tab active"><span>▦</span> Posts</span></div>`;
     if(isSelf||!user.isPrivate||relationship==='accepted'){
       const data=await request(`/users/${encodeURIComponent(username)}/posts?limit=30`);
       const posts=data.items||[];

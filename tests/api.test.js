@@ -279,3 +279,110 @@ test('private accounts require an accepted follow request', async () => {
   assert.equal(acceptedConnections.status, 200);
   assert.ok(acceptedConnections.body.items.some((user) => user.username === 'bob'));
 });
+
+test('comment replies retain their parent and reject comments from another post', async () => {
+  const post = await request(app).post('/api/posts').set(auth('alice')).send({ caption: 'A post for replies' });
+  assert.equal(post.status, 201);
+  const root = await request(app).post(`/api/posts/${post.body.post._id}/comments`).set(auth('bob')).send({ body: 'Root comment' });
+  assert.equal(root.status, 201);
+  const reply = await request(app).post(`/api/posts/${post.body.post._id}/comments`).set(auth('carol')).send({
+    body: 'A reply', parentId: root.body.comment._id,
+  });
+  assert.equal(reply.status, 201, JSON.stringify(reply.body));
+  assert.equal(String(reply.body.comment.parentId), root.body.comment._id);
+
+  const otherPost = await request(app).post('/api/posts').set(auth('alice')).send({ caption: 'Another post' });
+  const invalidParent = await request(app).post(`/api/posts/${otherPost.body.post._id}/comments`).set(auth('carol')).send({
+    body: 'Invalid cross-post reply', parentId: root.body.comment._id,
+  });
+  assert.equal(invalidParent.status, 404);
+});
+
+test('stories are follower-visible, expire after 24 hours, and count each viewer once', async () => {
+  const author = await request(app).post('/api/auth/register').send({
+    name: 'Story Author', username: 'story_author', email: 'story-author@test.dev', password: 'Password123!',
+  });
+  const viewer = await request(app).post('/api/auth/register').send({
+    name: 'Story Viewer', username: 'story_viewer', email: 'story-viewer@test.dev', password: 'Password123!',
+  });
+  const stranger = await request(app).post('/api/auth/register').send({
+    name: 'Story Stranger', username: 'story_stranger', email: 'story-stranger@test.dev', password: 'Password123!',
+  });
+  const authorAuth = { authorization: `Bearer ${author.body.accessToken}` };
+  const viewerAuth = { authorization: `Bearer ${viewer.body.accessToken}` };
+  const strangerAuth = { authorization: `Bearer ${stranger.body.accessToken}` };
+  const configuredCloudinary = process.env.CLOUDINARY_URL;
+  delete process.env.CLOUDINARY_URL;
+  const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/2ioAAAAASUVORK5CYII=', 'base64');
+  let imagePath;
+  try {
+    const created = await request(app)
+      .post('/api/stories')
+      .set(authorAuth)
+      .field('caption', 'A temporary moment')
+      .attach('image', image, { filename: 'story.png', contentType: 'image/png' });
+    assert.equal(created.status, 201, JSON.stringify(created.body));
+    const story = created.body.story;
+    assert.ok(new Date(story.expiresAt).getTime() - Date.now() <= 24 * 60 * 60 * 1000);
+    assert.match(story.media.url, /^\/uploads\/[a-f0-9-]+\.png$/);
+    imagePath = path.resolve('data/uploads', path.basename(story.media.url));
+    assert.equal((await request(app).get('/api/stories').set(viewerAuth)).body.stories.length, 0);
+
+    await request(app).post(`/api/users/${author.body.user.id}/follow`).set(viewerAuth).expect(201);
+    const visible = await request(app).get('/api/stories').set(viewerAuth);
+    assert.equal(visible.status, 200);
+    assert.equal(visible.body.stories[0].stories[0]._id, story._id);
+    assert.equal((await request(app).post(`/api/stories/${story._id}/view`).set(strangerAuth)).status, 403);
+    const firstView = await request(app).post(`/api/stories/${story._id}/view`).set(viewerAuth);
+    const repeatedView = await request(app).post(`/api/stories/${story._id}/view`).set(viewerAuth);
+    assert.deepEqual([firstView.body.viewed, firstView.body.viewCount], [true, 1]);
+    assert.deepEqual([repeatedView.body.viewed, repeatedView.body.viewCount], [false, 1]);
+
+    const { Story } = await import('../src/models/Story.js');
+    await Story.updateOne({ _id: story._id }, { $set: { expiresAt: new Date(Date.now() - 1000) } });
+    const expiredView = await request(app).post(`/api/stories/${story._id}/view`).set(viewerAuth);
+    assert.equal(expiredView.status, 404);
+    const afterExpiry = await request(app).get('/api/stories').set(viewerAuth);
+    assert.equal(afterExpiry.body.stories.length, 0);
+  } finally {
+    if (configuredCloudinary) process.env.CLOUDINARY_URL = configuredCloudinary;
+    else delete process.env.CLOUDINARY_URL;
+    if (imagePath) await unlink(imagePath);
+  }
+});
+
+test('direct messages are one-to-one, unread until opened, realtime-ready, and respect blocks', async () => {
+  const sender = await request(app).post('/api/auth/register').send({
+    name: 'Message Sender', username: 'message_sender', email: 'message-sender@test.dev', password: 'Password123!',
+  });
+  const recipient = await request(app).post('/api/auth/register').send({
+    name: 'Message Recipient', username: 'message_recipient', email: 'message-recipient@test.dev', password: 'Password123!',
+  });
+  const outsider = await request(app).post('/api/auth/register').send({
+    name: 'Message Outsider', username: 'message_outsider', email: 'message-outsider@test.dev', password: 'Password123!',
+  });
+  const senderAuth = { authorization: `Bearer ${sender.body.accessToken}` };
+  const recipientAuth = { authorization: `Bearer ${recipient.body.accessToken}` };
+  const outsiderAuth = { authorization: `Bearer ${outsider.body.accessToken}` };
+  assert.equal((await request(app).post('/api/messages/conversations').set(senderAuth).send({ username: 'message_sender' })).status, 400);
+
+  const started = await request(app).post('/api/messages/conversations').set(senderAuth).send({ username: 'message_recipient' });
+  assert.equal(started.status, 200, JSON.stringify(started.body));
+  const conversationId = started.body.conversation._id;
+  const same = await request(app).post('/api/messages/conversations').set(senderAuth).send({ username: 'message_recipient' });
+  assert.equal(same.body.conversation._id, conversationId);
+  const sent = await request(app).post(`/api/messages/conversations/${conversationId}/messages`).set(senderAuth).send({ body: 'Hello in real time' });
+  assert.equal(sent.status, 201, JSON.stringify(sent.body));
+  assert.equal(sent.body.message.body, 'Hello in real time');
+  assert.equal((await request(app).get('/api/messages/conversations').set(recipientAuth)).body.conversations[0].unreadCount, 1);
+  assert.equal((await request(app).get(`/api/messages/conversations/${conversationId}/messages`).set(outsiderAuth)).status, 404);
+  const received = await request(app).get(`/api/messages/conversations/${conversationId}/messages`).set(recipientAuth);
+  assert.equal(received.status, 200);
+  assert.equal(received.body.messages[0].body, 'Hello in real time');
+  assert.ok(received.body.messages[0].readAt);
+  assert.equal((await request(app).get('/api/messages/conversations').set(recipientAuth)).body.conversations[0].unreadCount, 0);
+
+  await request(app).post(`/api/users/${sender.body.user.id}/block`).set(recipientAuth).expect(201);
+  assert.equal((await request(app).post(`/api/messages/conversations/${conversationId}/messages`).set(senderAuth).send({ body: 'Blocked message' })).status, 403);
+  assert.equal((await request(app).post('/api/messages/conversations').set(senderAuth).send({ username: 'message_recipient' })).status, 403);
+});

@@ -1,10 +1,4 @@
 import { Router } from 'express';
-import multer from 'multer';
-import { v2 as cloudinary } from 'cloudinary';
-import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { Post } from '../models/Post.js';
 import { Like } from '../models/Like.js';
@@ -22,37 +16,10 @@ import { fanoutQueue, enqueueNotification } from '../queues.js';
 import { emitToPost } from '../realtime.js';
 import { hydrate, trendingBump } from '../services/feed.service.js';
 import { assertCanView } from '../services/follow.service.js';
+import { imageUpload, uploadImage } from '../services/media.service.js';
 
 const router = Router();
 router.use(requireAuth);
-const uploadsDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../data/uploads');
-const localImageExtensions = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' };
-
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024, files: 5 },
-  fileFilter: (req, file, cb) => {
-    if (localImageExtensions[file.mimetype]) return cb(null, true);
-    cb(new ApiError(400, 'Choose a JPEG, PNG, WebP, or GIF image'));
-  },
-});
-
-const uploadToCloudinary = (file) =>
-  new Promise((resolve, reject) => {
-    // f_auto/q_auto are applied at delivery time; here we cap dimensions so originals stay reasonable.
-    cloudinary.uploader
-      .upload_stream({ folder: 'socialfeed', transformation: [{ width: 1600, crop: 'limit' }] }, (err, r) =>
-        err ? reject(err) : resolve({ url: r.secure_url, publicId: r.public_id, width: r.width, height: r.height })
-      )
-      .end(file.buffer);
-  });
-
-const uploadLocally = async (file) => {
-  const filename = `${randomUUID()}${localImageExtensions[file.mimetype]}`;
-  await mkdir(uploadsDir, { recursive: true });
-  await writeFile(path.join(uploadsDir, filename), file.buffer, { flag: 'wx' });
-  return { url: `/uploads/${filename}`, publicId: `local:${filename}` };
-};
 
 const extractHashtags = (text) => [...new Set([...text.matchAll(/#([a-z0-9_]{1,50})/gi)].map((m) => m[1].toLowerCase()))].slice(0, 20);
 const extractMentions = (text) => [...new Set([...text.matchAll(/@([a-z0-9_.]{3,30})/gi)].map((m) => m[1].toLowerCase()))].slice(0, 5);
@@ -60,7 +27,7 @@ const extractMentions = (text) => [...new Set([...text.matchAll(/@([a-z0-9_.]{3,
 router.post(
   '/',
   writeLimiter,
-  upload.array('images', 5),
+  imageUpload.array('images', 5),
   validate({
     body: z.object({
       caption: z.string().max(2200).default(''),
@@ -71,7 +38,6 @@ router.post(
   asyncHandler(async (req, res) => {
     let media = req.body.mediaUrls.map((url) => ({ url }));
     if (req.files?.length) {
-      const uploadImage = process.env.CLOUDINARY_URL ? uploadToCloudinary : uploadLocally;
       media = await Promise.all(req.files.map(uploadImage));
     }
     if (!req.body.caption.trim() && !media.length) throw new ApiError(400, 'A post needs a caption or media');
@@ -95,7 +61,7 @@ router.get(
 router.patch(
   '/:id',
   writeLimiter,
-  upload.array('images', 5),
+  imageUpload.array('images', 5),
   validate({
     params: idParam,
     body: z.object({
@@ -117,7 +83,6 @@ router.patch(
     const keepUrls = new Set(req.body.mediaUrls || post.media.map((item) => item.url));
     let media = post.media.filter((item) => keepUrls.has(item.url));
     if (req.files?.length) {
-      const uploadImage = process.env.CLOUDINARY_URL ? uploadToCloudinary : uploadLocally;
       media = [...media, ...(await Promise.all(req.files.map(uploadImage)))].slice(0, 5);
     }
     if (!req.body.caption.trim() && !media.length) throw new ApiError(400, 'A post needs a caption or media');

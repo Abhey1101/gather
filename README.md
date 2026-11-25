@@ -20,7 +20,7 @@ npm install
 npm run dev
 ```
 
-The web app supports photo posts with up to five images, captions, likes, comments, searchable profiles, follow requests, and follows. Click a creator's name to view their profile and posts. Without `CLOUDINARY_URL`, uploaded photos are saved locally in `data/uploads/` for development. Set `CLOUDINARY_URL` to store and deliver images through Cloudinary; Docker shares its local uploads volume between API instances.
+The web app supports a paginated auto-loading feed, photo posts with up to five images, captions, likes, threaded comment replies, post sharing links, searchable profiles, follow requests, and follows. Stories accept one image, are visible to accepted followers, record unique viewers, and expire after 24 hours. One-to-one direct messages are persisted and delivered live over authenticated Socket.IO connections. Without `CLOUDINARY_URL`, uploaded images are saved locally in `data/uploads/` for development. Set `CLOUDINARY_URL` to store and deliver images through Cloudinary; Docker shares its local uploads volume between API instances.
 
 Demo script (90 seconds): open the demo page, click **Log in** on both panels, make Bob follow `alice_demo`, let Alice post,
 then Bob likes it. Alice's badge increments live, and further likes **aggregate** into one notification ("bob_demo and 12 others liked your post").
@@ -102,11 +102,13 @@ GitHub Actions workflow in `.github/workflows/ci.yml` runs it against Mongo and 
 | Feed | `GET /api/feed?cursor=&limit=10` |
 | Posts | `POST /api/posts` (JSON `mediaUrls` or multipart `images`, up to 5) · `GET/DELETE /api/posts/:id` · `POST/DELETE /api/posts/:id/like` · `…/save` · `GET /api/posts/saved` · `POST /api/posts/:id/report` |
 | Comments | `POST/GET /api/posts/:id/comments` (with `parentId` for replies, `@mentions` notify) · `DELETE /api/posts/:postId/comments/:commentId` |
+| Stories | `GET/POST /api/stories` · `POST /api/stories/:id/view` · `DELETE /api/stories/:id` (image, 24-hour expiry) |
+| Direct messages | `GET/POST /api/messages/conversations` · `GET/POST /api/messages/conversations/:id/messages` |
 | Social graph | `POST/DELETE /api/users/:id/follow` · `GET /api/users/:username/followers\|following` · `GET /api/follow-requests` · `PATCH /api/follow-requests/:id/accept\|reject` · `POST/DELETE /api/users/:id/block` · `GET /api/users/suggested` |
 | Profiles | `GET /api/users/:username` · `GET /api/users/:username/posts` · `GET /api/users/me/analytics?period=1d\|7d\|30d` · `PATCH /api/users/me` |
 | Notifications | `GET /api/notifications?cursor=` · `GET …/unread-count` · `PATCH …/read-all` · `PATCH …/:id/read` |
 | Explore | `GET /api/explore/trending` · `GET /api/search?q=&type=user\|post\|hashtag` |
-| Socket events | server → client: `notification:new`, `post:liked`, `comment:new` · client → server: `post:watch`, `post:unwatch` |
+| Socket events | server → client: `notification:new`, `message:new`, `post:liked`, `comment:new` · client → server: `post:watch`, `post:unwatch` |
 
 ## Production notes
 
@@ -116,6 +118,6 @@ GitHub Actions workflow in `.github/workflows/ci.yml` runs it against Mongo and 
 - Deploy: backend on Render/Railway/Fly.io (WebSocket support), MongoDB Atlas, Upstash Redis (use the TCP `rediss://` URL, which BullMQ requires). Run the worker as a second service (`npm run worker`, `RUN_WORKER=false` on the API).
 - Add Sentry (`@sentry/node`) and UptimeRobot on `/health` for monitoring.
 
-## Stretch goals (not implemented)
+## Stretch goals
 
-Stories with TTL indexes · algorithmic ranking · Redis hot counters flushed to Mongo · moderation API · FCM push.
+Algorithmic ranking · Redis hot counters flushed to Mongo · moderation API · FCM push.

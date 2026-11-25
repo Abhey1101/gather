@@ -1,5 +1,5 @@
 const API = '/api';
-const state = { accessToken: localStorage.getItem('gather_access') || '', refreshToken: localStorage.getItem('gather_refresh') || '', user: null, authMode: 'login', view: 'feed', cursor: null, loading: false, selectedImages: [], existingMedia: [], previewUrls: [], commentPostId: null, editingPostId: null, profilePosts: [], analyticsRequest: 0, connections: null };
+const state = { accessToken: localStorage.getItem('gather_access') || '', refreshToken: localStorage.getItem('gather_refresh') || '', user: null, authMode: 'login', view: 'feed', cursor: null, loading: false, selectedImages: [], existingMedia: [], previewUrls: [], commentPostId: null, replyParentId: null, replyTargetName: '', editingPostId: null, profilePosts: [], analyticsRequest: 0, connections: null, stories: [], activeStoryAuthor: 0, activeStoryIndex: 0, activeConversationId: null, activeConversationUser: null, socket: null, realtimeWarningShown: false };
 const $ = (s) => document.querySelector(s);
 const escapeHtml = (v='') => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const avatar = (user={}) => user.avatarUrl ? `<div class="avatar"><img src="${escapeHtml(user.avatarUrl)}" alt=""></div>` : `<div class="avatar">${escapeHtml((user.name || user.username || 'G').slice(0,1).toUpperCase())}</div>`;
@@ -17,7 +17,23 @@ async function request(path, options={}) {
   if(!response.ok) throw new Error(data.message || data.error || `Request failed (${response.status})`);
   return data;
 }
-function saveTokens(data){if(data.accessToken){state.accessToken=data.accessToken;localStorage.setItem('gather_access',data.accessToken)}if(data.refreshToken){state.refreshToken=data.refreshToken;localStorage.setItem('gather_refresh',data.refreshToken)}}
+function saveTokens(data){const previousToken=state.accessToken;if(data.accessToken){state.accessToken=data.accessToken;localStorage.setItem('gather_access',data.accessToken)}if(data.refreshToken){state.refreshToken=data.refreshToken;localStorage.setItem('gather_refresh',data.refreshToken)}if(state.user&&previousToken&&previousToken!==state.accessToken)connectSocket()}
+function connectSocket(){
+  if(!window.io||!state.accessToken)return;
+  state.socket?.disconnect();
+  state.socket=window.io({auth:{token:state.accessToken}});
+  state.socket.on('notification:new',()=>{loadUnread();toast('You have a new notification')});
+  state.socket.on('message:new',(event)=>{
+    loadMessageConversations();
+    if(state.view==='messages'&&state.activeConversationId===event.conversationId){
+      openConversation(state.activeConversationId,state.activeConversationUser);
+    }else toast('You have a new message');
+  });
+  state.socket.on('connect_error',(error)=>{
+    console.error('Realtime connection failed:',error.message);
+    if(!state.realtimeWarningShown){toast('Live updates are unavailable. Refresh to reconnect.',true);state.realtimeWarningShown=true}
+  });
+}
 function updatePasswordStrength(){
   const password=$('#authForm').elements.password.value;
   const score=[password.length>=8,/[a-z]/.test(password)&&/[A-Z]/.test(password),/[0-9]/.test(password),/[^a-zA-Z0-9]/.test(password)].filter(Boolean).length;
@@ -25,6 +41,67 @@ function updatePasswordStrength(){
   meter.dataset.strength=score;
   $('#strengthText').textContent=['Add a few more details','Could be stronger','Getting there','Strong password','Excellent password'][score];
 }
+async function loadStories(){
+  const list=$('#storyList');
+  if(!list)return;
+  try{
+    const data=await request('/stories');
+    state.stories=(data.stories||[]).sort((a,b)=>Number(b.isMine)-Number(a.isMine));
+    list.innerHTML=state.stories.length?state.stories.map((group,index)=>{
+      const storyCount=group.stories.length;
+      const views=group.isMine?group.stories.reduce((count,story)=>count+Number(story.viewCount||0),0):0;
+      return `<button type="button" class="story-item${group.isMine?' own-story':''}" data-story-author="${index}"><span class="story-ring">${avatar(group.author)}</span><strong>${group.isMine?'Your story':escapeHtml(group.author.username)}</strong>${views?`<small>${views} views</small>`:`<small>${storyCount} ${storyCount===1?'moment':'moments'}</small>`}</button>`;
+    }).join(''):'<p class="muted tiny stories-empty">No active stories yet. Share a moment with your followers.</p>';
+  }catch(error){list.innerHTML=`<p class="form-message" data-state="error">${escapeHtml(error.message)}</p><button class="text-button" type="button" data-retry-stories>Try again</button>`}
+}
+function renderStoryViewer(){
+  const group=state.stories[state.activeStoryAuthor];
+  const story=group?.stories[state.activeStoryIndex];
+  if(!story)return;
+  const author=group.author;
+  $('#storyViewerContent').innerHTML=`<div class="story-progress">${group.stories.map((_,index)=>`<span class="${index<=state.activeStoryIndex?'complete':''}"></span>`).join('')}</div><header class="story-viewer-header">${avatar(author)}<div><strong>${escapeHtml(author.username)}</strong><small>${escapeHtml(dateLabel(story.createdAt))}</small></div>${group.isMine?`<span class="story-views">${Number(story.viewCount||0)} views</span>`:''}</header><img class="story-viewer-image" src="${escapeHtml(story.media.url)}" alt="Story by ${escapeHtml(author.username)}">${story.caption?`<p class="story-viewer-caption">${escapeHtml(story.caption)}</p>`:''}<button type="button" class="story-nav story-prev" data-story-step="-1" aria-label="Previous story">‹</button><button type="button" class="story-nav story-next" data-story-step="1" aria-label="Next story">›</button>${group.isMine?`<button type="button" class="text-button story-delete" data-delete-story="${escapeHtml(story._id)}">Delete story</button>`:''}`;
+}
+function openStory(authorIndex,storyIndex=0){
+  state.activeStoryAuthor=authorIndex;
+  state.activeStoryIndex=storyIndex;
+  const group=state.stories[authorIndex];
+  const story=group?.stories[storyIndex];
+  if(!story)return;
+  $('#storyViewerDialog').showModal();
+  renderStoryViewer();
+  if(!group.isMine){
+    request(`/stories/${encodeURIComponent(story._id)}/view`,{method:'POST'})
+      .then((data)=>{story.viewCount=data.viewCount})
+      .catch(async(error)=>{
+        toast(error.message,true);
+        $('#storyViewerDialog').close();
+        await loadStories();
+      });
+  }
+}
+function stepStory(direction){
+  let authorIndex=state.activeStoryAuthor;
+  let storyIndex=state.activeStoryIndex+direction;
+  if(storyIndex<0){authorIndex--;storyIndex=state.stories[authorIndex]?.stories.length-1}
+  else if(storyIndex>=state.stories[authorIndex]?.stories.length){authorIndex++;storyIndex=0}
+  if(authorIndex<0||authorIndex>=state.stories.length){$('#storyViewerDialog').close();return}
+  openStory(authorIndex,storyIndex);
+}
+$('#storyImage').addEventListener('change',async(event)=>{
+  const input=event.currentTarget;
+  const file=input.files?.[0];
+  if(!file)return;
+  input.disabled=true;
+  try{
+    const image=await compressImage(file);
+    const body=new FormData();
+    body.append('image',image,image.name);
+    await request('/stories',{method:'POST',body});
+    toast('Your story is live for 24 hours');
+    await loadStories();
+  }catch(error){toast(error.message,true)}
+  finally{input.value='';input.disabled=false}
+});
 function updatePasswordMatch(){
   const password=$('#authForm').elements.password.value;
   const confirmation=$('#authForm').elements.confirmPassword.value;
@@ -63,8 +140,30 @@ function setAuthMode(mode){
   updatePasswordStrength();
   updatePasswordMatch();
 }
-function showSignedIn(){ $('#authPanel').classList.add('hidden');$('#appView').classList.remove('hidden');$('#logoutBtn').classList.remove('hidden');$('#sideName').textContent=state.user?.name||'Your profile';$('#sideHandle').textContent='@'+(state.user?.username||'member');$('#sideAvatar').innerHTML=state.user?.avatarUrl?`<img src="${escapeHtml(state.user.avatarUrl)}">`:escapeHtml((state.user?.name||'G').slice(0,1).toUpperCase());$('#composerAvatar').innerHTML=$('#sideAvatar').innerHTML;$('#commentAvatar').innerHTML=$('#sideAvatar').innerHTML;$('#topCreateBtn').classList.remove('hidden');loadFeed();loadTrending();loadSuggestedUsers();loadUnread();const sharedProfile=new URLSearchParams(location.search).get('profile');if(sharedProfile)showProfile(sharedProfile);}
-function showSignedOut(){state.user=null;state.accessToken='';state.refreshToken='';localStorage.removeItem('gather_access');localStorage.removeItem('gather_refresh');$('#authPanel').classList.remove('hidden');$('#appView').classList.add('hidden');$('#simpleView').classList.add('hidden');$('#logoutBtn').classList.add('hidden');$('#sideName').textContent='Guest user';$('#sideHandle').textContent='Sign in to continue';$('#sideAvatar').textContent='G';$('#composerAvatar').textContent='G';}
+function showSignedIn(){
+ $('#authPanel').classList.add('hidden');
+ $('#appView').classList.remove('hidden');
+ $('#logoutBtn').classList.remove('hidden');
+ $('#sideName').textContent=state.user?.name||'Your profile';
+ $('#sideHandle').textContent='@'+(state.user?.username||'member');
+ $('#sideAvatar').innerHTML=state.user?.avatarUrl?`<img src="${escapeHtml(state.user.avatarUrl)}">`:escapeHtml((state.user?.name||'G').slice(0,1).toUpperCase());
+ $('#composerAvatar').innerHTML=$('#sideAvatar').innerHTML;
+ $('#commentAvatar').innerHTML=$('#sideAvatar').innerHTML;
+ $('#topCreateBtn').classList.remove('hidden');
+ connectSocket();
+ loadFeed();
+ loadTrending();
+ loadSuggestedUsers();
+ loadUnread();
+ loadMessageConversations();
+ loadStories();
+ const params=new URLSearchParams(location.search);
+ const sharedPost=params.get('post');
+ const sharedProfile=params.get('profile');
+ if(sharedPost)openSharedPost(sharedPost);
+ else if(sharedProfile)showProfile(sharedProfile);
+}
+function showSignedOut(){state.socket?.disconnect();state.socket=null;state.user=null;state.accessToken='';state.refreshToken='';state.activeConversationId=null;localStorage.removeItem('gather_access');localStorage.removeItem('gather_refresh');$('#authPanel').classList.remove('hidden');$('#appView').classList.add('hidden');$('#simpleView').classList.add('hidden');$('#logoutBtn').classList.add('hidden');$('#sideName').textContent='Guest user';$('#sideHandle').textContent='Sign in to continue';$('#sideAvatar').textContent='G';$('#composerAvatar').textContent='G';}
 $('#authForm').addEventListener('submit',async e=>{
   e.preventDefault();
   const form=e.currentTarget;
@@ -223,6 +322,27 @@ postForm.addEventListener('submit',async(event)=>{
   }
 });
 function dateLabel(value){if(!value)return 'just now';const d=new Date(value);if(Number.isNaN(d.getTime()))return 'recently';return new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(d)}
+async function sharePost(postId){
+  const postUrl=new URL(location.href);
+  postUrl.search='';
+  postUrl.hash='';
+  postUrl.searchParams.set('post',postId);
+  if(navigator.share){
+    try{await navigator.share({title:'A post on Gather',url:postUrl.href});return}
+    catch(error){if(error.name==='AbortError')return}
+  }
+  if(navigator.clipboard?.writeText){
+    await navigator.clipboard.writeText(postUrl.href);
+    toast('Post link copied');
+  }else window.prompt('Copy this post link',postUrl.href);
+}
+async function openSharedPost(postId){
+  try{
+    const data=await request(`/posts/${encodeURIComponent(postId)}`);
+    $('#profilePostContent').innerHTML=postCard(data.post);
+    $('#profilePostDialog').showModal();
+  }catch(error){toast(`Couldn't open shared post: ${error.message}`,true)}
+}
 function postCard(post){
   const author=post.author||post.authorUser||post.user||{};
   const id=post._id||post.id||post.postId;
@@ -235,10 +355,16 @@ function postCard(post){
   const profileName=author.name||author.username||'Community member';
   const username=author.username||'member';
   const captionMarkup=caption?`<p class="post-caption"><button class="caption-author" type="button" data-profile="${escapeHtml(username)}">${escapeHtml(username)}</button> ${escapeHtml(caption).replace(/(^|\s)(#[a-z0-9_]+)/gi,'$1<span class="hashtag">$2</span>').replace(/\n/g,'<br>')}</p>`:'';
-  return `<article class="post-card card" data-post-id="${escapeHtml(id||'')}"><header class="post-header"><button class="post-author-profile" type="button" data-profile="${escapeHtml(username)}">${avatar(author)}<span class="author-meta"><strong>${escapeHtml(profileName)}</strong><small>@${escapeHtml(username)} · ${escapeHtml(dateLabel(post.createdAt))}</small></span></button>${author.username===state.user?.username?`<div class="post-menu-wrap"><button class="post-menu" type="button" data-post-menu="${escapeHtml(id||'')}" aria-label="Post options">···</button><div class="post-menu-actions hidden" data-post-menu-actions="${escapeHtml(id||'')}"><button type="button" data-edit-post="${escapeHtml(id||'')}">Edit post</button><button type="button" data-delete="${escapeHtml(id||'')}">Delete post</button></div></div>`:''}</header>${carousel}<div class="post-body">${captionMarkup}<div class="post-stats"><span class="like-count" data-like-count>♥ ${Number(post.likeCount||0)} ${Number(post.likeCount||0)===1?'like':'likes'}</span><button type="button" class="comment-count" data-comment="${escapeHtml(id||'')}">View all ${Number(post.commentCount||0)} comments</button>${post.location?`<span>⌖ ${escapeHtml(post.location)}</span>`:''}</div><div class="post-actions"><button type="button" class="post-action like-action${liked?' liked':''}" data-like="${escapeHtml(id||'')}" data-liked="${liked?'1':'0'}" aria-pressed="${liked?'true':'false'}"><span aria-hidden="true">${liked?'♥':'♡'}</span><span>${liked?'Liked':'Like'}</span></button><button type="button" class="post-action" data-comment="${escapeHtml(id||'')}"><span aria-hidden="true">▤</span><span>Comment</span></button><button type="button" class="post-action save-action${saved?' liked':''}" data-save="${escapeHtml(id||'')}" data-saved="${saved?'1':'0'}" aria-pressed="${saved?'true':'false'}"><span aria-hidden="true">♧</span><span>${saved?'Saved':'Save'}</span></button></div></div></article>`;
+  return `<article class="post-card card" data-post-id="${escapeHtml(id||'')}"><header class="post-header"><button class="post-author-profile" type="button" data-profile="${escapeHtml(username)}">${avatar(author)}<span class="author-meta"><strong>${escapeHtml(profileName)}</strong><small>@${escapeHtml(username)} · ${escapeHtml(dateLabel(post.createdAt))}</small></span></button>${author.username===state.user?.username?`<div class="post-menu-wrap"><button class="post-menu" type="button" data-post-menu="${escapeHtml(id||'')}" aria-label="Post options">···</button><div class="post-menu-actions hidden" data-post-menu-actions="${escapeHtml(id||'')}"><button type="button" data-edit-post="${escapeHtml(id||'')}">Edit post</button><button type="button" data-delete="${escapeHtml(id||'')}">Delete post</button></div></div>`:''}</header>${carousel}<div class="post-body">${captionMarkup}<div class="post-stats"><span class="like-count" data-like-count>♥ ${Number(post.likeCount||0)} ${Number(post.likeCount||0)===1?'like':'likes'}</span><button type="button" class="comment-count" data-comment="${escapeHtml(id||'')}">View all ${Number(post.commentCount||0)} comments</button>${post.location?`<span>⌖ ${escapeHtml(post.location)}</span>`:''}</div><div class="post-actions"><button type="button" class="post-action like-action${liked?' liked':''}" data-like="${escapeHtml(id||'')}" data-liked="${liked?'1':'0'}" aria-pressed="${liked?'true':'false'}"><span aria-hidden="true">${liked?'♥':'♡'}</span><span>${liked?'Liked':'Like'}</span></button><button type="button" class="post-action" data-comment="${escapeHtml(id||'')}"><span aria-hidden="true">▤</span><span>Comment</span></button><button type="button" class="post-action save-action${saved?' liked':''}" data-save="${escapeHtml(id||'')}" data-saved="${saved?'1':'0'}" aria-pressed="${saved?'true':'false'}"><span aria-hidden="true">♧</span><span>${saved?'Saved':'Save'}</span></button><button type="button" class="post-action" data-share-post="${escapeHtml(id||'')}" aria-label="Share post"><span aria-hidden="true">↗</span><span>Share</span></button></div></div></article>`;
 }
-async function loadFeed(append=false){if(state.loading)return;state.loading=true;const list=$('#feedList');if(!append){state.cursor=null;list.innerHTML='<div class="empty-state"><div class="loading-spinner"></div><p>Loading your feed…</p></div>'}try{const qs=new URLSearchParams({limit:'10'});if(append&&state.cursor)qs.set('cursor',state.cursor);const data=await request(`/feed?${qs}`);const items=data.items||data.posts||data.feed||[];state.cursor=data.nextCursor||null;const html=items.map(postCard).join('');if(!append)list.innerHTML=html||'<div class="empty-state"><div class="empty-icon">✳</div><strong>Your feed is ready for a first post.</strong><p>Follow people or share something to get the conversation started.</p></div>';else list.insertAdjacentHTML('beforeend',html);$('#loadMoreBtn').classList.toggle('hidden',!state.cursor);if(!items.length&&!append)$('#loadMoreBtn').classList.add('hidden')}catch(err){list.innerHTML=`<div class="empty-state"><strong>Couldn't load your feed</strong><p>${escapeHtml(err.message)}</p><button class="button button-light" id="retryFeed">Try again</button></div>`;$('#retryFeed')?.addEventListener('click',()=>loadFeed())}finally{state.loading=false}}
+async function loadFeed(append=false){if(state.loading||(append&&!state.cursor))return;state.loading=true;const list=$('#feedList');if(!append){state.cursor=null;list.innerHTML='<div class="empty-state"><div class="loading-spinner"></div><p>Loading your feed…</p></div>'}try{const qs=new URLSearchParams({limit:'10'});if(append&&state.cursor)qs.set('cursor',state.cursor);const data=await request(`/feed?${qs}`);const items=data.items||data.posts||data.feed||[];state.cursor=data.nextCursor||null;const html=items.map(postCard).join('');if(!append)list.innerHTML=html||'<div class="empty-state"><div class="empty-icon">✳</div><strong>Your feed is ready for a first post.</strong><p>Follow people or share something to get the conversation started.</p></div>';else list.insertAdjacentHTML('beforeend',html);$('#loadMoreBtn').classList.toggle('hidden',!state.cursor);if(!items.length&&!append)$('#loadMoreBtn').classList.add('hidden')}catch(err){if(append)toast(`Couldn't load more posts: ${err.message}`,true);else{list.innerHTML=`<div class="empty-state"><strong>Couldn't load your feed</strong><p>${escapeHtml(err.message)}</p><button class="button button-light" id="retryFeed">Try again</button></div>`;$('#retryFeed')?.addEventListener('click',()=>loadFeed())}}finally{state.loading=false}}
 $('#loadMoreBtn').addEventListener('click',()=>loadFeed(true));$('#refreshBtn').addEventListener('click',()=>state.view==='feed'?loadFeed():state.view==='profile'?showProfile(state.currentProfile):navigate(state.view));$('#topCreateBtn').addEventListener('click',()=>{$('#composer').scrollIntoView({behavior:'smooth',block:'center'});$('#postForm').elements.caption.focus()});
+if('IntersectionObserver' in window){
+  const feedObserver=new IntersectionObserver((entries)=>{
+    if(entries.some((entry)=>entry.isIntersecting)&&state.view==='feed'&&state.cursor&&!state.loading)loadFeed(true);
+  },{rootMargin:'500px 0px'});
+  feedObserver.observe($('#feedSentinel'));
+}
 function updatePostCounts(postId,{likeCount,commentCount}={}){
   document.querySelectorAll(`[data-post-id="${CSS.escape(postId)}"]`).forEach((card)=>{
     if(likeCount!==undefined){
@@ -254,7 +380,15 @@ function updatePostCounts(postId,{likeCount,commentCount}={}){
 function renderComment(comment){
   const author=comment.author||{};
   const username=author.username||'member';
-  return `<article class="comment-row">${avatar(author)}<p><button type="button" class="caption-author" data-profile="${escapeHtml(username)}">${escapeHtml(username)}</button> ${escapeHtml(comment.body||'')}</p><time>${escapeHtml(dateLabel(comment.createdAt))}</time></article>`;
+  const parentId=comment.parentId?String(comment.parentId._id||comment.parentId):'';
+  return `<article class="comment-row${parentId?' comment-reply':''}"${parentId?` data-parent-id="${escapeHtml(parentId)}"`:''}>${avatar(author)}<p><button type="button" class="caption-author" data-profile="${escapeHtml(username)}">${escapeHtml(username)}</button> ${escapeHtml(comment.body||'')}<button type="button" class="comment-reply-action" data-reply-comment="${escapeHtml(comment._id||comment.id||'')}" data-reply-name="${escapeHtml(username)}">Reply</button></p><time>${escapeHtml(dateLabel(comment.createdAt))}</time></article>`;
+}
+function clearReplyTarget(){
+  state.replyParentId=null;
+  state.replyTargetName='';
+  $('#replyingTo').classList.add('hidden');
+  $('#replyingTo span').textContent='';
+  $('#commentForm').elements.body.placeholder='Add a comment…';
 }
 async function openComments(postId){
   state.commentPostId=postId;
@@ -265,6 +399,7 @@ async function openComments(postId){
   $('#commentsPostSummary').innerHTML=caption?`<strong>${escapeHtml(author)}</strong> ${escapeHtml(caption)}`:`<strong>${escapeHtml(author)}</strong>'s post`;
   $('#commentList').innerHTML='<p class="muted tiny">Loading comments…</p>';
   $('#commentForm').elements.body.value='';
+  clearReplyTarget();
   if(!dialog.open)dialog.showModal();
   try{
     const data=await request(`/posts/${postId}/comments?limit=30`);
@@ -277,6 +412,10 @@ async function openComments(postId){
 $('#commentsDialog').addEventListener('click',(event)=>{
   if(event.target===event.currentTarget||event.target.closest('[data-close-comments]'))event.currentTarget.close();
 });
+$('#commentsDialog').addEventListener('close',clearReplyTarget);
+$('#storyViewerDialog').addEventListener('click',(event)=>{
+  if(event.target===event.currentTarget||event.target.closest('[data-close-story]'))event.currentTarget.close();
+});
 $('#commentForm').addEventListener('submit',async(event)=>{
   event.preventDefault();
   const form=event.currentTarget;
@@ -285,11 +424,14 @@ $('#commentForm').addEventListener('submit',async(event)=>{
   const button=form.querySelector('button[type=submit]');
   button.disabled=true;
   try{
-    const data=await request(`/posts/${state.commentPostId}/comments`,{method:'POST',body:JSON.stringify({body})});
+    const payload={body};
+    if(state.replyParentId)payload.parentId=state.replyParentId;
+    const data=await request(`/posts/${state.commentPostId}/comments`,{method:'POST',body:JSON.stringify(payload)});
     $('#commentList .comments-empty')?.remove();
     $('#commentList').insertAdjacentHTML('beforeend',renderComment({...data.comment,author:state.user}));
     updatePostCounts(state.commentPostId,{commentCount:data.commentCount});
     form.reset();
+    clearReplyTarget();
   }catch(error){toast(error.message,true)}finally{button.disabled=false}
 });
 document.addEventListener('click',async(event)=>{
@@ -301,6 +443,8 @@ document.addEventListener('click',async(event)=>{
   const like=target.closest('[data-like]');
   const save=target.closest('[data-save]');
   const comment=target.closest('[data-comment]');
+  const reply=target.closest('[data-reply-comment]');
+  const share=target.closest('[data-share-post]');
   const del=target.closest('[data-delete]');
   const follow=target.closest('[data-follow-user]');
   const followRequest=target.closest('[data-follow-request]');
@@ -308,8 +452,20 @@ document.addEventListener('click',async(event)=>{
   const postMenu=target.closest('[data-post-menu]');
   const editPost=target.closest('[data-edit-post]');
   const profileList=target.closest('[data-profile-list]');
+  const storyAuthor=target.closest('[data-story-author]');
+  const storyStep=target.closest('[data-story-step]');
+  const deleteStory=target.closest('[data-delete-story]');
   try{
-    if(target.closest('[data-retry-analytics]')){
+    if(target.closest('[data-retry-stories]'))await loadStories();
+    else if(storyAuthor)openStory(Number(storyAuthor.dataset.storyAuthor));
+    else if(storyStep)stepStory(Number(storyStep.dataset.storyStep));
+    else if(deleteStory){
+      await request(`/stories/${encodeURIComponent(deleteStory.dataset.deleteStory)}`,{method:'DELETE'});
+      $('#storyViewerDialog').close();
+      toast('Story deleted');
+      await loadStories();
+    }
+    else if(target.closest('[data-retry-analytics]')){
       await loadAnalytics(target.closest('[data-retry-analytics]').dataset.retryAnalytics);
     }
     else if(target.closest('[data-retry-connections]')){
@@ -380,6 +536,16 @@ document.addEventListener('click',async(event)=>{
     else if(target.closest('[data-close-profile-dialog]'))target.closest('dialog')?.close();
     else if(target.closest('[data-profile-create]')){navigate('feed');setTimeout(()=>{$('#composer').scrollIntoView({behavior:'smooth',block:'center'});$('#postForm').elements.caption.focus()},0)}
     else if(target.closest('[data-go-feed]'))navigate('feed');
+    else if(target.closest('[data-cancel-reply]'))clearReplyTarget();
+    else if(reply){
+      state.replyParentId=reply.dataset.replyComment;
+      state.replyTargetName=reply.dataset.replyName;
+      $('#replyingTo span').textContent=`Replying to @${state.replyTargetName}`;
+      $('#replyingTo').classList.remove('hidden');
+      $('#commentForm').elements.body.placeholder=`Reply to @${state.replyTargetName}…`;
+      $('#commentForm').elements.body.focus();
+    }
+    else if(share)await sharePost(share.dataset.sharePost);
     else if(carouselStep||carouselDot){
       const carousel=target.closest('.post-carousel');
       const images=[...carousel.querySelectorAll('.post-media')];
@@ -578,11 +744,88 @@ async function showConnections(username,direction){
   $('#profileConnectionsDialog').showModal();
   await loadConnectionPage();
 }
+async function loadMessageConversations(){
+  const list=$('#messageConversationList');
+  try{
+    const data=await request('/messages/conversations');
+    const conversations=data.conversations||[];
+    const unreadCount=conversations.reduce((total,conversation)=>total+Number(conversation.unreadCount||0),0);
+    const badge=$('#messageBadge');
+    badge.textContent=String(unreadCount);
+    badge.classList.toggle('hidden',!unreadCount);
+    if(!list)return;
+    list.innerHTML=conversations.length?conversations.map((conversation)=>{
+      const user=conversation.otherUser;
+      return `<button type="button" class="message-thread${state.activeConversationId===String(conversation._id)?' active':''}" data-message-conversation="${escapeHtml(conversation._id)}" data-message-username="${escapeHtml(user.username)}">${avatar(user)}<span><strong>${escapeHtml(user.name||user.username)}</strong><small>${escapeHtml(conversation.lastMessagePreview||'Start a conversation')}</small></span>${conversation.unreadCount?`<i class="count">${conversation.unreadCount}</i>`:''}</button>`;
+    }).join(''):'<p class="muted tiny">No conversations yet. Start one above.</p>';
+  }catch(error){if(list)list.innerHTML=`<p class="form-message" data-state="error">${escapeHtml(error.message)}</p>`;else console.error('Could not load message badge:',error)}
+}
+function renderDirectMessage(message){
+  const sender=message.sender||{};
+  const own=String(sender._id||sender.id)===String(state.user?._id||state.user?.id);
+  return `<article class="direct-message${own?' own-message':''}"><p>${escapeHtml(message.body).replace(/\n/g,'<br>')}</p><time>${escapeHtml(dateLabel(message.createdAt))}</time></article>`;
+}
+async function openConversation(conversationId,user){
+  if(!conversationId)return;
+  state.activeConversationId=String(conversationId);
+  state.activeConversationUser=user||state.activeConversationUser;
+  const panel=$('#messagePanel');
+  if(!panel)return;
+  panel.innerHTML='<div class="empty-state"><div class="loading-spinner"></div><p>Loading messages…</p></div>';
+  try{
+    const data=await request(`/messages/conversations/${encodeURIComponent(conversationId)}/messages?limit=50`);
+    if(state.activeConversationId!==String(conversationId))return;
+    const messages=data.messages||[];
+    const other=state.activeConversationUser||{};
+    panel.innerHTML=`<header class="message-panel-header">${avatar(other)}<div><strong>${escapeHtml(other.name||other.username||'Conversation')}</strong><small>@${escapeHtml(other.username||'member')}</small></div></header><div id="messageHistory" class="message-history">${messages.length?messages.map(renderDirectMessage).join(''):'<p class="muted tiny message-empty">Say hello to start the conversation.</p>'}</div><form id="messageForm" class="message-compose"><textarea name="body" maxlength="2000" rows="2" placeholder="Write a message…" required></textarea><button class="button button-primary" type="submit">Send</button></form>`;
+    const history=$('#messageHistory');
+    history.scrollTop=history.scrollHeight;
+    await loadMessageConversations();
+  }catch(error){panel.innerHTML=`<div class="empty-state"><strong>Couldn't load messages</strong><p>${escapeHtml(error.message)}</p></div>`}
+}
+$('#simpleContent').addEventListener('click',async(event)=>{
+  const thread=event.target.closest('[data-message-conversation]');
+  if(thread)await openConversation(thread.dataset.messageConversation,{username:thread.dataset.messageUsername,name:thread.querySelector('strong')?.textContent});
+});
+$('#simpleContent').addEventListener('submit',async(event)=>{
+  const form=event.target;
+  if(form.id==='newMessageForm'){
+    event.preventDefault();
+    const username=form.elements.username.value.trim();
+    const button=form.querySelector('[type=submit]');
+    button.disabled=true;
+    try{
+      const data=await request('/messages/conversations',{method:'POST',body:JSON.stringify({username})});
+      state.activeConversationUser=data.otherUser;
+      await loadMessageConversations();
+      await openConversation(data.conversation._id,data.otherUser);
+    }catch(error){toast(error.message,true)}
+    finally{button.disabled=false}
+  }else if(form.id==='messageForm'){
+    event.preventDefault();
+    const body=form.elements.body.value.trim();
+    if(!body||!state.activeConversationId)return;
+    const button=form.querySelector('[type=submit]');
+    button.disabled=true;
+    try{
+      const conversationId=state.activeConversationId;
+      const data=await request(`/messages/conversations/${encodeURIComponent(conversationId)}/messages`,{method:'POST',body:JSON.stringify({body})});
+      if(conversationId===state.activeConversationId){
+        $('#messageHistory .message-empty')?.remove();
+        $('#messageHistory').insertAdjacentHTML('beforeend',renderDirectMessage({...data.message,sender:state.user}));
+        $('#messageHistory').scrollTop=$('#messageHistory').scrollHeight;
+        form.reset();
+      }
+      await loadMessageConversations();
+    }catch(error){toast(error.message,true)}
+    finally{button.disabled=false}
+  }
+});
 function navigate(view){
   state.view=view;
   document.querySelectorAll('[data-view]').forEach((button)=>button.classList.toggle('active',button.dataset.view===view));
-  $('#pageTitle').textContent=view==='feed'?'Home feed':view==='explore'?'Explore':view==='analytics'?'Analytics':'Notifications';
-  $('#pageEyebrow').textContent=view==='feed'?'YOUR COMMUNITY':view==='explore'?'FIND YOUR PEOPLE':view==='analytics'?'YOUR PERFORMANCE':'STAY IN THE LOOP';
+  $('#pageTitle').textContent=view==='feed'?'Home feed':view==='explore'?'Explore':view==='analytics'?'Analytics':view==='messages'?'Messages':'Notifications';
+  $('#pageEyebrow').textContent=view==='feed'?'YOUR COMMUNITY':view==='explore'?'FIND YOUR PEOPLE':view==='analytics'?'YOUR PERFORMANCE':view==='messages'?'YOUR CONVERSATIONS':'STAY IN THE LOOP';
   $('#appView').classList.toggle('hidden',view!=='feed');
   $('#simpleView').classList.toggle('hidden',view==='feed');
   if(view==='feed'){loadFeed();return}
@@ -593,6 +836,9 @@ function navigate(view){
   }else if(view==='analytics'){
     box.innerHTML='<section id="analyticsContent" class="analytics-view"></section>';
     loadAnalytics();
+  }else if(view==='messages'){
+    box.innerHTML='<div class="messages-view"><aside class="message-sidebar"><div class="messages-title"><div><p class="eyebrow">KEEP IN TOUCH</p><h2>Messages</h2></div></div><form id="newMessageForm" class="new-message-form"><input name="username" minlength="3" maxlength="30" placeholder="Start with a username" aria-label="Username to message" required><button class="button button-light" type="submit">New</button></form><div id="messageConversationList" class="message-conversation-list"><p class="muted tiny">Loading conversations…</p></div></aside><section id="messagePanel" class="message-panel"><div class="empty-state"><div class="empty-icon">✉</div><strong>Your conversations</strong><p>Choose someone to message, or start a new conversation.</p></div></section></div>';
+    loadMessageConversations();
   }else{
     box.innerHTML='<div class="rail-heading"><div><p class="eyebrow">YOUR ACTIVITY</p><h2>Notifications</h2></div><button id="readAll" class="button button-light">Mark all read</button></div><section class="requests-section"><h3>Follow requests</h3><div id="followRequestsList"><p class="muted tiny">Loading requests…</p></div></section><div id="notificationsList"><div class="empty-state"><div class="loading-spinner"></div><p>Loading notifications…</p></div></div>';
     $('#readAll').addEventListener('click',async()=>{try{await request('/notifications/read-all',{method:'PATCH'});await loadNotifications();await loadUnread()}catch(error){toast(error.message,true)}});
@@ -656,5 +902,4 @@ async function searchPosts(q,type){
 }
 async function loadNotifications(){const list=$('#notificationsList');if(!list)return;try{const data=await request('/notifications?limit=20');const items=data.items||[];list.innerHTML=items.length?items.map(n=>{const actors=(n.actors||[]).map(a=>a.name||a.username).filter(Boolean).join(', ');const text=n.type==='like'?'liked your post':n.type==='comment'?'commented on your post':n.type==='follow'?'started following you':n.type==='reply'?'replied to your comment':`sent you a ${n.type||'notification'}`;return `<div class="notification-row"><strong>${escapeHtml(actors||'Someone')}</strong> ${escapeHtml(text)} <span class="muted">· ${escapeHtml(dateLabel(n.updatedAt||n.createdAt))}</span>${n.readAt?'':' <span class="count">NEW</span>'}</div>`}).join(''):'<div class="empty-state"><div class="empty-icon">♡</div><strong>All caught up.</strong><p>New activity from your community will show up here.</p></div>'}catch(err){list.innerHTML=`<p class="form-message">${escapeHtml(err.message)}</p>`}}
 async function init(){if(!state.accessToken){showSignedOut();return}try{const data=await request('/auth/me');state.user=data.user;showSignedIn()}catch{showSignedOut()}}
-if(window.io){try{const socket=window.io();socket.on('notification:new',()=>{loadUnread();toast('You have a new notification')})}catch{}}
 init();

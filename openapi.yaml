@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: |
     Hybrid fan-out feed, aggregated real-time notifications (Socket.io), cursor pagination.
-    Real-time events (Socket.io, `auth: { token }`): `notification:new`, `post:liked`, `comment:new`.
+    Real-time events (Socket.io, `auth: { token }`): `notification:new`, `message:new`, `post:liked`, `comment:new`.
     Client emits `post:watch` / `post:unwatch` with a post id to receive live counters.
 servers:
   - url: /
@@ -93,6 +93,22 @@ paths:
   /api/posts/{id}/report:
     parameters: [{ $ref: '#/components/parameters/id' }]
     post: { tags: [Moderation], summary: Report post, responses: { "201": { description: Reported } } }
+  /api/stories:
+    get: { tags: [Stories], summary: Active stories from accepted follows, responses: { "200": { description: Grouped stories with viewer status } } }
+    post: { tags: [Stories], summary: Create a 24-hour story (multipart image, optional caption), responses: { "201": { description: Created }, "400": { description: Image required } } }
+  /api/stories/{id}/view:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    post: { tags: [Stories], summary: Record one view per viewer, responses: { "200": { description: View status and count }, "403": { description: Not permitted to view } } }
+  /api/stories/{id}:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    delete: { tags: [Stories], summary: Delete own story, responses: { "204": { description: Deleted } } }
+  /api/messages/conversations:
+    get: { tags: [Messages], summary: List conversations and unread counts, responses: { "200": { description: Conversation list } } }
+    post: { tags: [Messages], summary: Start or return a one-to-one conversation by username, responses: { "200": { description: Conversation }, "403": { description: Messaging blocked } } }
+  /api/messages/conversations/{id}/messages:
+    parameters: [{ $ref: '#/components/parameters/id' }]
+    get: { tags: [Messages], summary: List messages and mark incoming messages read, parameters: [{ $ref: '#/components/parameters/cursor' }, { $ref: '#/components/parameters/limit' }], responses: { "200": { description: Messages in chronological order } } }
+    post: { tags: [Messages], summary: Send a message and deliver it over Socket.IO, responses: { "201": { description: Created }, "403": { description: Messaging blocked } } }
   /api/users/suggested:
     get: { tags: [Users], summary: Suggested users, responses: { "200": { description: OK } } }
   /api/users/me:

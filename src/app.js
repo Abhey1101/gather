@@ -20,6 +20,8 @@ import postRoutes from './routes/posts.js';
 import feedRoutes from './routes/feed.js';
 import notificationRoutes from './routes/notifications.js';
 import exploreRoutes, { searchRouter } from './routes/explore.js';
+import storyRoutes from './routes/stories.js';
+import messageRoutes from './routes/messages.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -50,6 +52,8 @@ export function createApp() {
   app.use('/api/feed', feedRoutes);
   app.use('/api/notifications', notificationRoutes);
   app.use('/api/explore', exploreRoutes);
+  app.use('/api/stories', storyRoutes);
+  app.use('/api/messages', messageRoutes);
   app.use('/api/search', searchRouter);
 
   app.use(notFound);
